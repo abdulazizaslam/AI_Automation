@@ -7,7 +7,26 @@
       "mcp__n8n-mcp__list_credentials",
       "mcp__n8n-mcp__get_workflow_details",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "mcp__supabase__list_projects",
+      "mcp__supabase__list_tables",
+      "mcp__supabase__apply_migration",
+      "Bash(npx --version)",
+      "Bash(npx add-mcp *)",
+      "mcp__n8n-mcp__search_projects",
+      "mcp__supabase__get_advisors",
+      "mcp__supabase__get_project_url",
+      "mcp__supabase__list_edge_functions",
+      "mcp__n8n-mcp__search_workflows",
+      "PowerShell(git ls-remote *)",
+      "mcp__supabase__get_project",
+      "mcp__n8n-mcp__execute_workflow",
+      "mcp__supabase__execute_sql"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "vercel"
+  ]
 }
