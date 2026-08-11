@@ -1,0 +1,11 @@
+# Claude Code local state and temporary worktrees
+.claude/settings.local.json
+.claude/worktrees/
+
+# Local test artifacts
+test1.txt
+
+# Environment and secret files
+.env
+.env.*
+!.env.example
