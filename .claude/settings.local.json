@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__n8n-mcp__search_nodes",
+      "mcp__n8n-mcp__create_workflow_from_code",
+      "mcp__n8n-mcp__get_workflow_sdk_reference",
+      "mcp__n8n-mcp__list_credentials",
+      "mcp__n8n-mcp__get_workflow_details",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  }
+}
