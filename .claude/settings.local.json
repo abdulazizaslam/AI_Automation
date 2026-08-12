@@ -22,11 +22,28 @@
       "PowerShell(git ls-remote *)",
       "mcp__supabase__get_project",
       "mcp__n8n-mcp__execute_workflow",
-      "mcp__supabase__execute_sql"
+      "mcp__supabase__execute_sql",
+      "mcp__n8n-mcp__list_n8n_connect_services",
+      "Bash(gh auth *)",
+      "Skill(claude-api)",
+      "Bash(git ls-remote *)",
+      "PowerShell($cmd = Get-Command gh -ErrorAction SilentlyContinue; if \\($null -eq $cmd\\) { 'gh_not_found' } else { 'gh_found: ' + $cmd.Source; gh auth status })",
+      "PowerShell($names = @\\('ANTHROPIC_API_KEY','CLAUDE_API_KEY'\\); foreach \\($n in $names\\) { $v = [Environment]::GetEnvironmentVariable\\($n\\); if \\([string]::IsNullOrWhiteSpace\\($v\\)\\) { \"$n=not_set\" } else { \"$n=set\" } })",
+      "Skill(claude-api:*)",
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "WebSearch",
+      "WebFetch(domain:docs.n8n.io)",
+      "WebFetch(domain:supabase.com)",
+      "PowerShell(claude -p \"Use the connected n8n MCP server to list all workflows read-only. Return only the total count and each workflow name with ID. Do not execute or modify workflows. If n8n MCP is unavailable, state that clearly.\")",
+      "PowerShell(git add .gitignore .mcp.json .claude/skills/n8n/SKILL.md)",
+      "PowerShell(git check-ignore -v .claude/settings.local.json)",
+      "PowerShell(git restore --staged .claude/settings.local.json)",
+      "PowerShell(git add .mcp.json)",
+      "PowerShell(git commit -m \"Update Supabase MCP configuration\")",
+      "PowerShell(git push origin main)"
     ]
   },
   "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": [
-    "vercel"
-  ]
+  "enabledMcpjsonServers": []
 }
