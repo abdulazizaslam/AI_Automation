@@ -168,7 +168,7 @@ export default async function Dashboard() {
                     )}
                   </td>
                   <td suppressHydrationWarning style={{ color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>
-                    {new Date(call.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {new Date(call.created_at).toLocaleDateString()}
+                    {new Date(call.created_at).toISOString().slice(11, 16)} · {new Date(call.created_at).toISOString().slice(0, 10)}
                   </td>
                   <td suppressHydrationWarning>
                     <Link href={`/leads/${call.lead_id}`} className="button secondary" style={{ padding: "4px 10px", fontSize: "12px", height: "32px" }}>
@@ -205,7 +205,7 @@ export default async function Dashboard() {
                   <span className="badge completed">{a.status}</span>
                 </div>
                 <div className="muted" style={{ fontSize: "13px", fontFamily: "'JetBrains Mono', monospace" }} suppressHydrationWarning>
-                  📅 <span suppressHydrationWarning>{new Date(a.appointment_datetime).toLocaleString()}</span>
+                  📅 <span suppressHydrationWarning>{new Date(a.appointment_datetime).toISOString().replace('T', ' ').slice(0, 16)} UTC</span>
                 </div>
                 {a.notes && (
                   <p style={{ margin: "8px 0 0", fontSize: "13px", color: "var(--text-secondary)", background: "rgba(255,255,255,0.02)", padding: "8px 12px", borderRadius: "6px", border: "1px solid rgba(255,255,255,0.04)" }} suppressHydrationWarning>
