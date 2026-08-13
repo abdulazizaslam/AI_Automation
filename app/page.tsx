@@ -40,9 +40,21 @@ export default async function Dashboard() {
             Launch AI-driven solar sales consultations, qualify homeowners, and book appointments automatically.
           </p>
         </div>
-        <div className="actions" suppressHydrationWarning style={{ flexWrap: "wrap", justifyContent: "flex-end" }}>
+        <div className="actions" suppressHydrationWarning style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "nowrap", whiteSpace: "nowrap" }}>
           <StartCallButton />
-          <Link className="button secondary" href="/leads">
+          <Link
+            className="button secondary"
+            href="/leads"
+            style={{
+              height: "44px",
+              padding: "0 18px",
+              display: "inline-flex",
+              alignItems: "center",
+              whiteSpace: "nowrap",
+              textDecoration: "none",
+              boxSizing: "border-box"
+            }}
+          >
             View Leads & Calls →
           </Link>
           <ResetDatabaseButton />

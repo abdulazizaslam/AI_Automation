@@ -58,13 +58,24 @@ export function StartCallButton() {
 
   return (
     <>
-      <div>
-        <button className="button" onClick={startCall} disabled={busy} style={{ gap: "10px" }}>
-          <span style={{ fontSize: "16px" }}>📞</span>
-          {busy ? "Connecting Voice Agent…" : "Start Real-Time Voice Call"}
-        </button>
-        {message && <div className="alert">{message}</div>}
-      </div>
+      <button
+        className="button"
+        onClick={startCall}
+        disabled={busy}
+        style={{
+          gap: "8px",
+          height: "44px",
+          padding: "0 18px",
+          display: "inline-flex",
+          alignItems: "center",
+          whiteSpace: "nowrap",
+          boxSizing: "border-box"
+        }}
+      >
+        <span style={{ fontSize: "15px" }}>📞</span>
+        <span>{busy ? "Connecting Agent…" : "Start Real-Time Voice Call"}</span>
+      </button>
+      {message && <span className="alert" style={{ margin: 0, padding: "8px 12px", fontSize: "12px" }}>{message}</span>}
 
       {session && (
         <RealtimeVoiceCallModal session={session} onClose={handleCloseCall} />
@@ -91,18 +102,18 @@ export function ResetDatabaseButton() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Reset failed");
 
-      setStatus({ type: "success", text: "Database cleaned! Leads preserved." });
+      setStatus({ type: "success", text: "Reset!" });
       router.refresh();
-      setTimeout(() => setStatus(null), 4000);
+      setTimeout(() => setStatus(null), 3500);
     } catch (err) {
-      setStatus({ type: "error", text: err instanceof Error ? err.message : "Reset failed" });
+      setStatus({ type: "error", text: err instanceof Error ? err.message : "Failed" });
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+    <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", whiteSpace: "nowrap" }}>
       <button
         className="button secondary"
         onClick={handleReset}
@@ -111,16 +122,23 @@ export function ResetDatabaseButton() {
           border: "1px solid #d0ded4",
           color: "#4a5d52",
           fontSize: "13px",
-          padding: "11px 16px"
+          height: "44px",
+          padding: "0 16px",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "6px",
+          whiteSpace: "nowrap",
+          boxSizing: "border-box"
         }}
         title="Clears calls, qualifications, and appointments while preserving all leads"
       >
-        {loading ? "Cleaning Database…" : "🔄 Clean & Reset DB"}
+        <span>🔄</span>
+        <span>{loading ? "Resetting…" : "Clean & Reset DB"}</span>
       </button>
       {status && (
         <span
           className={`badge ${status.type === "success" ? "completed" : "failed"}`}
-          style={{ fontSize: "12px", padding: "6px 12px" }}
+          style={{ fontSize: "11px", padding: "4px 8px" }}
         >
           {status.text}
         </span>
