@@ -73,6 +73,63 @@ export function StartCallButton() {
   );
 }
 
+export function ResetDatabaseButton() {
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const router = useRouter();
+
+  async function handleReset() {
+    if (!window.confirm("Are you sure you want to clean and reset all test calls and appointments? Leads in your leads table will be preserved.")) {
+      return;
+    }
+
+    setLoading(true);
+    setStatus(null);
+
+    try {
+      const res = await fetch("/api/reset-db", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Reset failed");
+
+      setStatus({ type: "success", text: "Database cleaned! Leads preserved." });
+      router.refresh();
+      setTimeout(() => setStatus(null), 4000);
+    } catch (err) {
+      setStatus({ type: "error", text: err instanceof Error ? err.message : "Reset failed" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+      <button
+        className="button secondary"
+        onClick={handleReset}
+        disabled={loading}
+        style={{
+          border: "1px solid #d0ded4",
+          color: "#4a5d52",
+          fontSize: "13px",
+          padding: "11px 16px"
+        }}
+        title="Clears calls, qualifications, and appointments while preserving all leads"
+      >
+        {loading ? "Cleaning Database…" : "🔄 Clean & Reset DB"}
+      </button>
+      {status && (
+        <span
+          className={`badge ${status.type === "success" ? "completed" : "failed"}`}
+          style={{ fontSize: "12px", padding: "6px 12px" }}
+        >
+          {status.text}
+        </span>
+      )}
+    </div>
+  );
+}
+
+
 function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; onClose: () => void }) {
   const { lead, call_id } = session;
   const [history, setHistory] = useState<Array<{ role: "assistant" | "user"; content: string }>>([]);

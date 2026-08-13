@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { StartCallButton, DashboardAutoRefresher } from "./components";
+import { StartCallButton, ResetDatabaseButton, DashboardAutoRefresher } from "./components";
 import type { Call, Appointment, Lead } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -40,11 +40,12 @@ export default async function Dashboard() {
             Launch AI-driven solar sales consultations, qualify homeowners, and book appointments automatically.
           </p>
         </div>
-        <div className="actions" suppressHydrationWarning>
+        <div className="actions" suppressHydrationWarning style={{ flexWrap: "wrap", justifyContent: "flex-end" }}>
           <StartCallButton />
           <Link className="button secondary" href="/leads">
             View Leads & Calls →
           </Link>
+          <ResetDatabaseButton />
         </div>
       </div>
 

@@ -113,22 +113,25 @@ export async function POST(request: Request) {
 
     if (geminiKey) {
       try {
-        const promptText = `${SYSTEM_PROMPT.replace(/\[NAME\]/g, firstName).replace(/\[ADDRESS\]/g, address)}
-        
-CONVERSATION HISTORY:
-${conversationHistory.map((h: any) => `${h.role === "assistant" ? "Agent" : firstName}: ${h.content}`).join("\n")}
-${userUtterance ? `${firstName}: ${userUtterance}` : "(Initial call connection)"}
+        const systemText = SYSTEM_PROMPT.replace(/\[NAME\]/g, firstName).replace(/\[ADDRESS\]/g, address);
+        const historyContext = conversationHistory.map((h: any) => `${h.role === "assistant" ? "Alex (Agent)" : firstName}: ${h.content}`).join("\n");
+        const currentInput = userUtterance ? `${firstName}: ${userUtterance}` : "(User picked up the phone. Deliver the Step 1 Hook now)";
 
-Respond ONLY with valid JSON following the REQUIRED OUTPUT FORMAT.`;
+        const promptText = `SYSTEM INSTRUCTIONS:\n${systemText}\n\nCONVERSATION SO FAR:\n${historyContext}\n\nCURRENT USER UTTERANCE:\n${currentInput}\n\nDeliver the natural conversational response in strict JSON format:`;
 
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`, {
+        const modelName = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiKey}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{ parts: [{ text: promptText }] }],
-            generationConfig: { responseMimeType: "application/json" }
+            generationConfig: {
+              responseMimeType: "application/json",
+              temperature: 0.3
+            }
           })
         });
+
         if (res.ok) {
           const data = await res.json();
           const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -138,7 +141,7 @@ Respond ONLY with valid JSON following the REQUIRED OUTPUT FORMAT.`;
           }
         }
       } catch (e) {
-        console.error("Gemini call failed, falling back to built-in solar conversational engine", e);
+        console.error("Gemini API call failed, falling back to built-in solar conversational engine", e);
       }
     }
 
