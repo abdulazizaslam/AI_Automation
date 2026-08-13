@@ -28,16 +28,16 @@ export default async function Dashboard() {
   const names = new Map(leads.map(lead => [lead.id, `${lead.first_name} ${lead.last_name}`]));
 
   return (
-    <>
-      <div className="hero">
-        <div>
-          <div className="eyebrow">Solar Automation Pipeline</div>
-          <h1>Solar Voice Agent</h1>
-          <p className="muted">
+    <div suppressHydrationWarning>
+      <div className="hero" suppressHydrationWarning>
+        <div suppressHydrationWarning>
+          <div className="eyebrow" suppressHydrationWarning>Solar Automation Pipeline</div>
+          <h1 suppressHydrationWarning>Solar Voice Agent</h1>
+          <p className="muted" suppressHydrationWarning>
             Launch AI-driven solar sales consultations, qualify homeowners, and book appointments automatically.
           </p>
         </div>
-        <div className="actions">
+        <div className="actions" suppressHydrationWarning>
           <StartCallButton />
           <Link className="button secondary" href="/leads">
             View Leads & Calls →
@@ -45,33 +45,33 @@ export default async function Dashboard() {
         </div>
       </div>
 
-      {error && <div className="alert">{error}</div>}
+      {error && <div className="alert" suppressHydrationWarning>{error}</div>}
 
-      <div className="grid">
-        <div className="card">
-          <div className="muted">Test Leads</div>
-          <div className="stat">{leads.length}</div>
+      <div className="grid" suppressHydrationWarning>
+        <div className="card" suppressHydrationWarning>
+          <div className="muted" suppressHydrationWarning>Test Leads</div>
+          <div className="stat" suppressHydrationWarning>{leads.length}</div>
         </div>
-        <div className="card">
-          <div className="muted">Recent Calls</div>
-          <div className="stat">{calls.length}</div>
+        <div className="card" suppressHydrationWarning>
+          <div className="muted" suppressHydrationWarning>Recent Calls</div>
+          <div className="stat" suppressHydrationWarning>{calls.length}</div>
         </div>
-        <div className="card">
-          <div className="muted">Booked Appointments</div>
-          <div className="stat">{appointments.length}</div>
+        <div className="card" suppressHydrationWarning>
+          <div className="muted" suppressHydrationWarning>Booked Appointments</div>
+          <div className="stat" suppressHydrationWarning>{appointments.length}</div>
         </div>
       </div>
 
-      <div className="section-title">
-        <h2>Recent Activity & Calls</h2>
+      <div className="section-title" suppressHydrationWarning>
+        <h2 suppressHydrationWarning>Recent Activity & Calls</h2>
         <Link href="/leads">View all leads & calls →</Link>
       </div>
 
-      <div className="card table-wrap">
+      <div className="card table-wrap" suppressHydrationWarning>
         {calls.length ? (
-          <table className="table">
-            <thead>
-              <tr>
+          <table className="table" suppressHydrationWarning>
+            <thead suppressHydrationWarning>
+              <tr suppressHydrationWarning>
                 <th>Lead Name</th>
                 <th>Status</th>
                 <th>Outcome</th>
@@ -80,29 +80,29 @@ export default async function Dashboard() {
                 <th>Action</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody suppressHydrationWarning>
               {calls.map(call => (
-                <tr key={call.id}>
-                  <td>
+                <tr key={call.id} suppressHydrationWarning>
+                  <td suppressHydrationWarning>
                     <Link href={`/leads/${call.lead_id}`}>
                       {names.get(call.lead_id) || "Test Lead"}
                     </Link>
                   </td>
-                  <td>
+                  <td suppressHydrationWarning>
                     <span className={`badge ${call.call_status === "completed" ? "completed" : "pending"}`}>
                       {call.call_status}
                     </span>
                   </td>
-                  <td>{call.call_outcome || "—"}</td>
-                  <td>
+                  <td suppressHydrationWarning>{call.call_outcome || "—"}</td>
+                  <td suppressHydrationWarning>
                     {call.appointment_booked ? (
                       <span className="badge completed">Confirmed</span>
                     ) : (
                       <span className="badge pending">No Appointment</span>
                     )}
                   </td>
-                  <td>{new Date(call.created_at).toLocaleString()}</td>
-                  <td>
+                  <td suppressHydrationWarning>{new Date(call.created_at).toLocaleString()}</td>
+                  <td suppressHydrationWarning>
                     <Link href={`/leads/${call.lead_id}`}>View details →</Link>
                   </td>
                 </tr>
@@ -110,33 +110,33 @@ export default async function Dashboard() {
             </tbody>
           </table>
         ) : (
-          <div className="empty">
+          <div className="empty" suppressHydrationWarning>
             No calls placed yet. Click <strong>Start AI Call</strong> above to test a live call with a random Supabase lead!
           </div>
         )}
       </div>
 
-      <div className="section-title">
-        <h2>Upcoming Appointments</h2>
+      <div className="section-title" suppressHydrationWarning>
+        <h2 suppressHydrationWarning>Upcoming Appointments</h2>
       </div>
 
-      <div className="card">
+      <div className="card" suppressHydrationWarning>
         {appointments.length ? (
-          <div className="call-list">
+          <div className="call-list" suppressHydrationWarning>
             {appointments.map(a => (
-              <div className="call-row" key={a.id}>
-                <strong>{names.get(a.lead_id) || "Lead Consultation"}</strong>
-                <span className="muted">
-                  📅 {new Date(a.appointment_datetime).toLocaleString()} · Status: <span className="badge completed">{a.status}</span>
+              <div className="call-row" key={a.id} suppressHydrationWarning>
+                <strong suppressHydrationWarning>{names.get(a.lead_id) || "Lead Consultation"}</strong>
+                <span className="muted" suppressHydrationWarning>
+                  📅 <span suppressHydrationWarning>{new Date(a.appointment_datetime).toLocaleString()}</span> · Status: <span className="badge completed">{a.status}</span>
                 </span>
-                {a.notes && <p style={{ margin: "4px 0 0", fontSize: "13px", color: "#4f5e55" }}>{a.notes}</p>}
+                {a.notes && <p style={{ margin: "4px 0 0", fontSize: "13px", color: "#4f5e55" }} suppressHydrationWarning>{a.notes}</p>}
               </div>
             ))}
           </div>
         ) : (
-          <div className="empty">No appointments booked yet.</div>
+          <div className="empty" suppressHydrationWarning>No appointments booked yet.</div>
         )}
       </div>
-    </>
+    </div>
   );
 }

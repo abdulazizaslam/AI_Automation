@@ -34,22 +34,22 @@ export default async function LeadsPage() {
   });
 
   return (
-    <>
-      <div className="hero">
-        <div>
-          <div className="eyebrow">Backend Lead Management</div>
-          <h1>Leads & Calls</h1>
-          <p className="muted">All test leads from Supabase and their latest voice agent status.</p>
+    <div suppressHydrationWarning>
+      <div className="hero" suppressHydrationWarning>
+        <div suppressHydrationWarning>
+          <div className="eyebrow" suppressHydrationWarning>Backend Lead Management</div>
+          <h1 suppressHydrationWarning>Leads & Calls</h1>
+          <p className="muted" suppressHydrationWarning>All test leads from Supabase and their latest voice agent status.</p>
         </div>
         <Link className="button secondary" href="/">
           ← Back to Dashboard
         </Link>
       </div>
 
-      <div className="card table-wrap">
-        <table className="table">
-          <thead>
-            <tr>
+      <div className="card table-wrap" suppressHydrationWarning>
+        <table className="table" suppressHydrationWarning>
+          <thead suppressHydrationWarning>
+            <tr suppressHydrationWarning>
               <th>Lead Name</th>
               <th>Phone</th>
               <th>Status</th>
@@ -59,24 +59,24 @@ export default async function LeadsPage() {
               <th>Details</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody suppressHydrationWarning>
             {leads.map(lead => {
               const call = latestCallMap.get(lead.id);
               const apt = latestAppointmentMap.get(lead.id);
               return (
-                <tr key={lead.id}>
-                  <td>
-                    <strong>
+                <tr key={lead.id} suppressHydrationWarning>
+                  <td suppressHydrationWarning>
+                    <strong suppressHydrationWarning>
                       {lead.first_name} {lead.last_name}
                     </strong>
                     <br />
-                    <small className="muted">{lead.property_address || lead.address}</small>
+                    <small className="muted" suppressHydrationWarning>{lead.property_address || lead.address}</small>
                   </td>
-                  <td>{lead.phone}</td>
-                  <td>
+                  <td suppressHydrationWarning>{lead.phone}</td>
+                  <td suppressHydrationWarning>
                     <span className="badge completed">{lead.lead_status || "new"}</span>
                   </td>
-                  <td>
+                  <td suppressHydrationWarning>
                     {call ? (
                       <span className={`badge ${call.call_status === "completed" ? "completed" : "pending"}`}>
                         {call.call_status}
@@ -85,17 +85,17 @@ export default async function LeadsPage() {
                       <span className="muted">No Calls</span>
                     )}
                   </td>
-                  <td>{call?.call_outcome || "—"}</td>
-                  <td>
+                  <td suppressHydrationWarning>{call?.call_outcome || "—"}</td>
+                  <td suppressHydrationWarning>
                     {apt ? (
-                      <span className="badge completed">
+                      <span className="badge completed" suppressHydrationWarning>
                         {new Date(apt.appointment_datetime).toLocaleDateString()}
                       </span>
                     ) : (
                       "—"
                     )}
                   </td>
-                  <td>
+                  <td suppressHydrationWarning>
                     <Link href={`/leads/${lead.id}`} className="button secondary" style={{ padding: "6px 12px", fontSize: "12px" }}>
                       View →
                     </Link>
@@ -105,8 +105,8 @@ export default async function LeadsPage() {
             })}
           </tbody>
         </table>
-        {!leads.length && <div className="empty">No leads found.</div>}
+        {!leads.length && <div className="empty" suppressHydrationWarning>No leads found.</div>}
       </div>
-    </>
+    </div>
   );
 }
