@@ -21,8 +21,8 @@ export async function POST() {
     }
 
     // 2. Identify which leads have already been called
-    const calledLeadIdSet = new Set((callsRes.data || []).map(c => c.lead_id));
-    const uncalledLeads = leads.filter(l => !calledLeadIdSet.has(l.id));
+    const calledLeadIdSet = new Set((callsRes.data || []).map((c: any) => c.lead_id));
+    const uncalledLeads = leads.filter((l: any) => !calledLeadIdSet.has(l.id));
 
     // 3. Pick a random UNCALLED lead first until all leads are done.
     // If all leads have been called, cycle through all leads randomly.
