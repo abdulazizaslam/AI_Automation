@@ -1,6 +1,5 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
-import { getSupabaseAdmin } from "@/lib/supabase";
+import { getSupabaseAdmin, getMockLeadById } from "@/lib/supabase";
 import type { Lead, Call, Qualification, Appointment } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -9,21 +8,28 @@ export default async function LeadDetail({ params }: { params: Promise<{ id: str
   const { id } = await params;
   const db = getSupabaseAdmin();
 
-  const [l, c, q, a] = await Promise.all([
-    db.from("leads").select("*").eq("id", id).maybeSingle(),
-    db.from("calls").select("*").eq("lead_id", id).order("created_at", { ascending: false }),
-    db.from("lead_qualifications").select("*").eq("lead_id", id).maybeSingle(),
-    db.from("appointments").select("*").eq("lead_id", id).order("appointment_datetime", { ascending: true })
-  ]);
+  let lead: Lead = getMockLeadById(id);
+  let calls: Call[] = [];
+  let qualification: Qualification | null = null;
+  let appointments: Appointment[] = [];
 
-  if (!l.data) notFound();
+  try {
+    const [l, c, q, a] = await Promise.all([
+      db.from("leads").select("*").eq("id", id).maybeSingle(),
+      db.from("calls").select("*").eq("lead_id", id).order("created_at", { ascending: false }),
+      db.from("lead_qualifications").select("*").eq("lead_id", id).maybeSingle(),
+      db.from("appointments").select("*").eq("lead_id", id).order("appointment_datetime", { ascending: true })
+    ]);
 
-  const lead = l.data as Lead;
-  const calls = (c.data || []) as Call[];
-  const qualification = q.data as Qualification | null;
-  const appointments = (a.data || []) as Appointment[];
+    if (l.data) lead = l.data as Lead;
+    calls = (c.data || []) as Call[];
+    qualification = q.data as Qualification | null;
+    appointments = (a.data || []) as Appointment[];
+  } catch (err) {
+    console.error("Error fetching lead detail:", err);
+  }
+
   const latestCall = calls[0];
-
   const field = (v: unknown) => (v === null || v === undefined || v === "" ? "—" : String(v));
 
   return (
