@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Lead } from "@/lib/types";
+import { GeminiLiveClient } from "@/lib/gemini-live-client";
 
 export interface CallSession {
   call_id: string;
@@ -74,7 +75,7 @@ export function StartCallButton() {
         }}
       >
         <span style={{ fontSize: "15px" }}>📞</span>
-        <span>{busy ? "Connecting Agent…" : "Start Real-Time Voice Call"}</span>
+        <span>{busy ? "Connecting Live Agent…" : "Start Real-Time Voice Call"}</span>
       </button>
       {message && <span className="alert" style={{ margin: 0, padding: "8px 12px", fontSize: "12px" }}>{message}</span>}
 
@@ -162,8 +163,10 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
   const [summaryNote, setSummaryNote] = useState("");
   const [bestVoice, setBestVoice] = useState<SpeechSynthesisVoice | null>(null);
   const [micVolume, setMicVolume] = useState<number>(0);
+  const [isGeminiLiveStreaming, setIsGeminiLiveStreaming] = useState<boolean>(false);
 
   const recognitionRef = useRef<any>(null);
+  const geminiLiveRef = useRef<GeminiLiveClient | null>(null);
   const historyRef = useRef<Array<{ role: "assistant" | "user"; content: string }>>([]);
   const isSpeakingRef = useRef<boolean>(false);
   const isMutedRef = useRef<boolean>(false);
@@ -190,76 +193,6 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
   useEffect(() => {
     callEndedRef.current = callEnded;
   }, [callEnded]);
-
-  // Audio recording & Realtime Microphone Volume Analyser
-  useEffect(() => {
-    if (typeof window !== "undefined" && navigator.mediaDevices?.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-      }).then(stream => {
-        mediaStreamRef.current = stream;
-
-        // 1. Media Recorder
-        try {
-          recordedChunksRef.current = [];
-          const mimeType = (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported("audio/webm")) ? "audio/webm" : "";
-          const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-          recorder.ondataavailable = (e) => {
-            if (e.data && e.data.size > 0) {
-              recordedChunksRef.current.push(e.data);
-            }
-          };
-          recorder.start(400);
-          mediaRecorderRef.current = recorder;
-        } catch (err) {
-          console.warn("MediaRecorder start notice:", err);
-        }
-
-        // 2. Real-time AudioContext Volume Analyser
-        try {
-          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-          if (AudioContextClass) {
-            const ctx = new AudioContextClass();
-            audioContextRef.current = ctx;
-            const source = ctx.createMediaStreamSource(stream);
-            const analyser = ctx.createAnalyser();
-            analyser.fftSize = 64;
-            source.connect(analyser);
-            analyserRef.current = analyser;
-
-            const dataArray = new Uint8Array(analyser.frequencyBinCount);
-            const checkVolume = () => {
-              if (callEndedRef.current) return;
-              analyser.getByteFrequencyData(dataArray);
-              let sum = 0;
-              for (let i = 0; i < dataArray.length; i++) {
-                sum += dataArray[i];
-              }
-              const avg = sum / dataArray.length;
-              setMicVolume(Math.min(100, Math.round((avg / 128) * 100)));
-              animFrameRef.current = requestAnimationFrame(checkVolume);
-            };
-            checkVolume();
-          }
-        } catch (err) {
-          console.warn("Audio analyser notice:", err);
-        }
-      }).catch(err => {
-        console.warn("Audio stream access notice:", err);
-      });
-    }
-
-    return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-      if (audioContextRef.current) audioContextRef.current.close().catch(() => {});
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-        try { mediaRecorderRef.current.stop(); } catch (e) {}
-      }
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach(t => t.stop());
-      }
-    };
-  }, []);
 
   // Helper to compile recorded audio blob to Base64 data URL
   const getAudioRecordingUrl = useCallback(async (): Promise<string> => {
@@ -342,97 +275,6 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     return `${m}:${s}`;
   };
 
-  // Continuous Speech Recognition (Microphone listening)
-  const startListening = useCallback(() => {
-    if (callEndedRef.current || isMutedRef.current) return;
-    if (typeof window === "undefined") return;
-
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
-
-    try {
-      if (recognitionRef.current) {
-        try { recognitionRef.current.abort(); } catch (e) {}
-      }
-
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = "en-US";
-
-      recognition.onstart = () => {
-        if (!isSpeakingRef.current && !callEndedRef.current) {
-          setStatus("listening");
-        }
-      };
-
-      recognition.onresult = (event: any) => {
-        if (isMutedRef.current || callEndedRef.current) return;
-
-        let interim = "";
-        let final = "";
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            final += event.results[i][0].transcript;
-          } else {
-            interim += event.results[i][0].transcript;
-          }
-        }
-
-        const recognizedText = (final || interim).trim();
-
-        // 1. LIVE BARGE-IN: If the user starts speaking while the AI is talking, immediately cut off the AI!
-        if (isSpeakingRef.current && recognizedText.length > 0) {
-          if (typeof window !== "undefined" && "speechSynthesis" in window) {
-            window.speechSynthesis.cancel();
-          }
-          if (audioPlayerRef.current) {
-            audioPlayerRef.current.pause();
-          }
-          isSpeakingRef.current = false;
-          setStatus("listening");
-        }
-
-        if (recognizedText) {
-          setLiveTranscript(recognizedText);
-          lastSpokenTextRef.current = recognizedText;
-
-          // 2. ULTRA-FAST REALTIME TURN: Respond in 550ms after user pauses speaking
-          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-          silenceTimerRef.current = setTimeout(() => {
-            if (lastSpokenTextRef.current && !callEndedRef.current) {
-              const textToSend = lastSpokenTextRef.current;
-              lastSpokenTextRef.current = "";
-              setLiveTranscript("");
-              sendVoiceTurn(textToSend);
-            }
-          }, 550);
-        }
-      };
-
-      recognition.onerror = (e: any) => {
-        if (e.error !== "no-speech") {
-          console.warn("Speech recognition notice:", e.error);
-        }
-      };
-
-      recognition.onend = () => {
-        // ALWAYS auto-restart continuous listening so duplex never drops
-        if (!callEndedRef.current && !isMutedRef.current) {
-          try {
-            recognition.start();
-          } catch (e) {}
-        }
-      };
-
-      recognition.start();
-      recognitionRef.current = recognition;
-    } catch (e) {
-      console.warn("Speech recognition init notice:", e);
-    }
-  }, []);
-
   const stopListening = useCallback(() => {
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
@@ -452,7 +294,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
       window.speechSynthesis.cancel();
 
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.04; // Natural brisk conversational cadence
+      utterance.rate = 1.04;
       utterance.pitch = 1.0;
 
       if (bestVoice) {
@@ -561,15 +403,219 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     }
   }, [lead, call_id, speakVoice, stopListening, getAudioRecordingUrl]);
 
-  // Initial call connection
+  // Speech Recognition (Duplex Fallback)
+  const startListening = useCallback(() => {
+    if (callEndedRef.current || isMutedRef.current) return;
+    if (typeof window === "undefined") return;
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    try {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (e) {}
+      }
+
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+
+      recognition.onstart = () => {
+        if (!isSpeakingRef.current && !callEndedRef.current) {
+          setStatus("listening");
+        }
+      };
+
+      recognition.onresult = (event: any) => {
+        if (isMutedRef.current || callEndedRef.current) return;
+
+        let interim = "";
+        let final = "";
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            final += event.results[i][0].transcript;
+          } else {
+            interim += event.results[i][0].transcript;
+          }
+        }
+
+        const recognizedText = (final || interim).trim();
+
+        if (isSpeakingRef.current && recognizedText.length > 0) {
+          if (typeof window !== "undefined" && "speechSynthesis" in window) {
+            window.speechSynthesis.cancel();
+          }
+          if (audioPlayerRef.current) {
+            audioPlayerRef.current.pause();
+          }
+          isSpeakingRef.current = false;
+          setStatus("listening");
+        }
+
+        if (recognizedText) {
+          setLiveTranscript(recognizedText);
+          lastSpokenTextRef.current = recognizedText;
+
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = setTimeout(() => {
+            if (lastSpokenTextRef.current && !callEndedRef.current) {
+              const textToSend = lastSpokenTextRef.current;
+              lastSpokenTextRef.current = "";
+              setLiveTranscript("");
+              sendVoiceTurn(textToSend);
+            }
+          }, 550);
+        }
+      };
+
+      recognition.onerror = (e: any) => {
+        if (e.error !== "no-speech") {
+          console.warn("Speech recognition notice:", e.error);
+        }
+      };
+
+      recognition.onend = () => {
+        if (!callEndedRef.current && !isMutedRef.current) {
+          try {
+            recognition.start();
+          } catch (e) {}
+        }
+      };
+
+      recognition.start();
+      recognitionRef.current = recognition;
+    } catch (e) {
+      console.warn("Speech recognition init notice:", e);
+    }
+  }, [sendVoiceTurn]);
+
+  // Main Call Initializer with Gemini Live API Integration
   useEffect(() => {
-    startListening();
-    const timer = setTimeout(() => {
-      sendVoiceTurn();
-    }, 400);
+    let activeStream: MediaStream | null = null;
+
+    if (typeof window !== "undefined" && navigator.mediaDevices?.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      }).then(async (stream) => {
+        mediaStreamRef.current = stream;
+        activeStream = stream;
+
+        // Start call recorder for Supabase audio save
+        try {
+          recordedChunksRef.current = [];
+          const mimeType = (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported("audio/webm")) ? "audio/webm" : "";
+          const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+          recorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) {
+              recordedChunksRef.current.push(e.data);
+            }
+          };
+          recorder.start(400);
+          mediaRecorderRef.current = recorder;
+        } catch (err) {
+          console.warn("MediaRecorder start notice:", err);
+        }
+
+        // Live AudioContext Volume Analyser
+        try {
+          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+          if (AudioContextClass) {
+            const ctx = new AudioContextClass();
+            audioContextRef.current = ctx;
+            const source = ctx.createMediaStreamSource(stream);
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 64;
+            source.connect(analyser);
+            analyserRef.current = analyser;
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            const checkVolume = () => {
+              if (callEndedRef.current) return;
+              analyser.getByteFrequencyData(dataArray);
+              let sum = 0;
+              for (let i = 0; i < dataArray.length; i++) {
+                sum += dataArray[i];
+              }
+              const avg = sum / dataArray.length;
+              setMicVolume(Math.min(100, Math.round((avg / 128) * 100)));
+              animFrameRef.current = requestAnimationFrame(checkVolume);
+            };
+            checkVolume();
+          }
+        } catch (err) {
+          console.warn("Audio analyser notice:", err);
+        }
+
+        // Connect to Gemini Multimodal Live API
+        try {
+          const sessionRes = await fetch("/api/gemini-live-session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lead })
+          });
+          const sessionData = await sessionRes.json();
+
+          if (sessionData.apiKey) {
+            const liveClient = new GeminiLiveClient(sessionData.apiKey, sessionData.systemInstruction, sessionData.voice || "Aoede");
+
+            liveClient.onStatusChange = (st) => {
+              if (!callEndedRef.current) setStatus(st);
+            };
+
+            liveClient.onAgentTranscript = (txt) => {
+              setHistory(prev => {
+                const last = prev[prev.length - 1];
+                if (last && last.role === "assistant") {
+                  const updated = [...prev];
+                  updated[updated.length - 1] = { role: "assistant", content: `${last.content} ${txt}`.trim() };
+                  return updated;
+                }
+                return [...prev, { role: "assistant", content: txt }];
+              });
+            };
+
+            liveClient.onVolumeChange = (vol) => {
+              setMicVolume(vol);
+            };
+
+            liveClient.onError = () => {
+              console.warn("Falling back to Gemini Flash Fast Streaming...");
+              setIsGeminiLiveStreaming(false);
+              startListening();
+              sendVoiceTurn();
+            };
+
+            await liveClient.start(stream);
+            geminiLiveRef.current = liveClient;
+            setIsGeminiLiveStreaming(true);
+            return;
+          }
+        } catch (err) {
+          console.warn("Gemini Live session init error, using Flash fallback:", err);
+        }
+
+        // Fallback to Flash Realtime Duplex
+        startListening();
+        sendVoiceTurn();
+      }).catch(err => {
+        console.warn("Microphone access notice:", err);
+        startListening();
+        sendVoiceTurn();
+      });
+    }
 
     return () => {
-      clearTimeout(timer);
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      if (geminiLiveRef.current) geminiLiveRef.current.stop();
+      if (audioContextRef.current) audioContextRef.current.close().catch(() => {});
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        try { mediaRecorderRef.current.stop(); } catch (e) {}
+      }
+      if (activeStream) {
+        activeStream.getTracks().forEach(t => t.stop());
+      }
       stopListening();
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
         window.speechSynthesis.cancel();
@@ -583,6 +629,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
   async function handleEndCallByUser() {
     setCallEnded(true);
     callEndedRef.current = true;
+    if (geminiLiveRef.current) geminiLiveRef.current.stop();
     stopListening();
 
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
@@ -633,7 +680,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
           <div className="lead-title">
             <div className="call-badge-live">
               <span className="pulse-dot" />
-              <span>{callEnded ? "SESSION TERMINATED" : `REALTIME DUPLEX CALL · ${formatDuration(callDuration)}`}</span>
+              <span>{callEnded ? "SESSION TERMINATED" : isGeminiLiveStreaming ? `GEMINI LIVE STREAMING · ${formatDuration(callDuration)}` : `REALTIME VOICE CALL · ${formatDuration(callDuration)}`}</span>
             </div>
             <h3>{lead.first_name} {lead.last_name}</h3>
             <p>📞 {lead.phone} · 📍 {lead.property_address || lead.address}</p>
@@ -672,9 +719,9 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
           </div>
 
           <div className="call-agent-identity">
-            <h4>Alex · Autonomous Solar Consultant</h4>
+            <h4>Alex · Solar AI Voice Consultant</h4>
             <p className="muted" style={{ margin: "4px 0 10px", fontSize: "12px" }}>
-              {bestVoice ? `Voice Profile: ${bestVoice.name.replace(/(Microsoft|Google|Desktop|Online \(Natural\))/g, "").trim()}` : "Neural Voice Engine"}
+              {isGeminiLiveStreaming ? "Engine: Google Gemini Multimodal Live API (Aoede)" : bestVoice ? `Voice: ${bestVoice.name.replace(/(Microsoft|Google|Desktop|Online \(Natural\))/g, "").trim()}` : "Gemini 2.0 Flash Fast Streaming"}
             </p>
           </div>
 
