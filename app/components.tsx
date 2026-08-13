@@ -431,7 +431,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
       };
 
       recognition.onresult = (event: any) => {
-        if (isSpeakingRef.current || isMutedRef.current || callEndedRef.current) return;
+        if (isMutedRef.current || callEndedRef.current) return;
 
         let interim = "";
         let final = "";
@@ -445,20 +445,33 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
         }
 
         const recognizedText = (final || interim).trim();
+
+        // 1. LIVE BARGE-IN: If the user starts speaking while the AI is talking, immediately cut off the AI!
+        if (isSpeakingRef.current && recognizedText.length > 1) {
+          if (typeof window !== "undefined" && "speechSynthesis" in window) {
+            window.speechSynthesis.cancel();
+          }
+          if (audioPlayerRef.current) {
+            audioPlayerRef.current.pause();
+          }
+          isSpeakingRef.current = false;
+          setStatus("listening");
+        }
+
         if (recognizedText) {
           setLiveTranscript(recognizedText);
           lastSpokenTextRef.current = recognizedText;
 
-          // Debounce / silence detection to trigger AI turn
+          // 2. ULTRA-FAST REALTIME TURN: Respond in 650ms after user finishes sentence
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = setTimeout(() => {
-            if (lastSpokenTextRef.current && !isSpeakingRef.current && !callEndedRef.current) {
+            if (lastSpokenTextRef.current && !callEndedRef.current) {
               const textToSend = lastSpokenTextRef.current;
               lastSpokenTextRef.current = "";
               setLiveTranscript("");
               sendVoiceTurn(textToSend);
             }
-          }, 1300);
+          }, 650);
         }
       };
 
