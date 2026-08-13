@@ -491,14 +491,14 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     }
   }, [sendVoiceTurn]);
 
-  // Main Call Initializer with Gemini Live API Integration
+  // Main Call Initializer
   useEffect(() => {
     let activeStream: MediaStream | null = null;
 
     if (typeof window !== "undefined" && navigator.mediaDevices?.getUserMedia) {
       navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-      }).then(async (stream) => {
+      }).then((stream) => {
         mediaStreamRef.current = stream;
         activeStream = stream;
 
@@ -548,67 +548,21 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
           console.warn("Audio analyser notice:", err);
         }
 
-        // Connect to Gemini Multimodal Live API
-        try {
-          const sessionRes = await fetch("/api/gemini-live-session", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ lead })
-          });
-          const sessionData = await sessionRes.json();
-
-          if (sessionData.apiKey) {
-            const liveClient = new GeminiLiveClient(sessionData.apiKey, sessionData.systemInstruction, sessionData.voice || "Aoede");
-
-            liveClient.onStatusChange = (st) => {
-              if (!callEndedRef.current) setStatus(st);
-            };
-
-            liveClient.onAgentTranscript = (txt) => {
-              setHistory(prev => {
-                const last = prev[prev.length - 1];
-                if (last && last.role === "assistant") {
-                  const updated = [...prev];
-                  updated[updated.length - 1] = { role: "assistant", content: `${last.content} ${txt}`.trim() };
-                  return updated;
-                }
-                return [...prev, { role: "assistant", content: txt }];
-              });
-            };
-
-            liveClient.onVolumeChange = (vol) => {
-              setMicVolume(vol);
-            };
-
-            liveClient.onError = () => {
-              console.warn("Falling back to Gemini Flash Fast Streaming...");
-              setIsGeminiLiveStreaming(false);
-              startListening();
-              sendVoiceTurn();
-            };
-
-            await liveClient.start(stream);
-            geminiLiveRef.current = liveClient;
-            setIsGeminiLiveStreaming(true);
-            return;
-          }
-        } catch (err) {
-          console.warn("Gemini Live session init error, using Flash fallback:", err);
-        }
-
-        // Fallback to Flash Realtime Duplex
+        // Start listening & immediately trigger Agent's Step 1 Opening Hook!
         startListening();
         sendVoiceTurn();
-      }).catch(err => {
+      }).catch((err) => {
         console.warn("Microphone access notice:", err);
         startListening();
         sendVoiceTurn();
       });
+    } else {
+      startListening();
+      sendVoiceTurn();
     }
 
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-      if (geminiLiveRef.current) geminiLiveRef.current.stop();
       if (audioContextRef.current) audioContextRef.current.close().catch(() => {});
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
         try { mediaRecorderRef.current.stop(); } catch (e) {}
