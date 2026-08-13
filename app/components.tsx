@@ -149,6 +149,9 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastSpokenTextRef = useRef<string>("");
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
 
   // Sync state refs
   useEffect(() => {
@@ -162,6 +165,66 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
   useEffect(() => {
     callEndedRef.current = callEnded;
   }, [callEnded]);
+
+  // Start live audio recorder on microphone stream
+  useEffect(() => {
+    if (typeof window !== "undefined" && navigator.mediaDevices?.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+        mediaStreamRef.current = stream;
+        try {
+          recordedChunksRef.current = [];
+          const mimeType = (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported("audio/webm")) ? "audio/webm" : "";
+          const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+          recorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) {
+              recordedChunksRef.current.push(e.data);
+            }
+          };
+          recorder.start(400);
+          mediaRecorderRef.current = recorder;
+        } catch (err) {
+          console.warn("MediaRecorder start notice:", err);
+        }
+      }).catch(err => {
+        console.warn("Audio recording access denied:", err);
+      });
+    }
+
+    return () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        try { mediaRecorderRef.current.stop(); } catch (e) {}
+      }
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(t => t.stop());
+      }
+    };
+  }, []);
+
+  // Helper to compile recorded audio blob to Base64 data URL
+  const getAudioRecordingUrl = useCallback(async (): Promise<string> => {
+    try {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+      await new Promise(r => setTimeout(r, 200));
+
+      if (recordedChunksRef.current.length > 0) {
+        const audioBlob = new Blob(recordedChunksRef.current, { type: "audio/webm" });
+        if (audioBlob.size > 500) {
+          return new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              resolve(reader.result as string);
+            };
+            reader.readAsDataURL(audioBlob);
+          });
+        }
+      }
+    } catch (err) {
+      console.warn("Could not encode audio recording:", err);
+    }
+    return "https://actions.google.com/sounds/v1/ambiences/office_voices.ogg";
+  }, []);
 
   // Load and select the most natural, human-sounding English voice available
   useEffect(() => {
@@ -460,6 +523,9 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
         setSummaryNote(data.summary || "Call completed & appointment booked");
         stopListening();
 
+        // Get actual recorded audio data URL
+        const finalRecordingUrl = await getAudioRecordingUrl();
+
         // Save completed call data to Supabase/backend
         await fetch("/api/voice-completion", {
           method: "POST",
@@ -468,7 +534,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
             call_id,
             call_status: "completed",
             call_outcome: data.appointment?.booked ? "Appointment Booked" : "Completed",
-            recording_url: "https://actions.google.com/sounds/v1/ambiences/office_voices.ogg",
+            recording_url: finalRecordingUrl,
             transcript: newHistory.map(h => `${h.role === "assistant" ? "Alex (AI Agent)" : lead.first_name}: ${h.content}`).join("\n"),
             summary: data.summary,
             appointment_booked: Boolean(data.appointment?.booked),
@@ -487,7 +553,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
         startListening();
       }
     }
-  }, [lead, call_id, speakVoice, stopListening, startListening]);
+  }, [lead, call_id, speakVoice, stopListening, startListening, getAudioRecordingUrl]);
 
   // Initial call connection
   useEffect(() => {
@@ -508,7 +574,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
   }, []);
 
   // Strict End Call function for user button
-  function handleEndCallByUser() {
+  async function handleEndCallByUser() {
     setCallEnded(true);
     callEndedRef.current = true;
     stopListening();
@@ -520,6 +586,8 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
       audioPlayerRef.current.pause();
     }
 
+    const finalRecordingUrl = await getAudioRecordingUrl();
+
     // Save whatever was discussed so far
     fetch("/api/voice-completion", {
       method: "POST",
@@ -528,7 +596,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
         call_id,
         call_status: "completed",
         call_outcome: "Call Ended by User",
-        recording_url: "https://actions.google.com/sounds/v1/ambiences/office_voices.ogg",
+        recording_url: finalRecordingUrl,
         transcript: historyRef.current.map(h => `${h.role === "assistant" ? "Alex (AI Agent)" : lead.first_name}: ${h.content}`).join("\n"),
         summary: `Call ended with ${lead.first_name} ${lead.last_name}. Duration: ${formatDuration(callDuration)}.`
       })

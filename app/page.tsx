@@ -79,6 +79,7 @@ export default async function Dashboard() {
                 <th>Lead Name</th>
                 <th>Status</th>
                 <th>Outcome</th>
+                <th>Audio</th>
                 <th>Booked</th>
                 <th>Date & Time</th>
                 <th>Action</th>
@@ -99,6 +100,17 @@ export default async function Dashboard() {
                   </td>
                   <td suppressHydrationWarning>{call.call_outcome || "—"}</td>
                   <td suppressHydrationWarning>
+                    {call.recording_url ? (
+                      <Link href={`/leads/${call.lead_id}`} style={{ textDecoration: "none" }}>
+                        <span className="badge completed" style={{ fontSize: "11px", cursor: "pointer" }}>
+                          🔊 Play Audio
+                        </span>
+                      </Link>
+                    ) : (
+                      <span className="muted" style={{ fontSize: "12px" }}>—</span>
+                    )}
+                  </td>
+                  <td suppressHydrationWarning>
                     {call.appointment_booked ? (
                       <span className="badge completed">Confirmed</span>
                     ) : (
@@ -107,7 +119,9 @@ export default async function Dashboard() {
                   </td>
                   <td suppressHydrationWarning>{new Date(call.created_at).toLocaleString()}</td>
                   <td suppressHydrationWarning>
-                    <Link href={`/leads/${call.lead_id}`}>View details →</Link>
+                    <Link href={`/leads/${call.lead_id}`} className="button secondary" style={{ padding: "6px 12px", fontSize: "12px" }}>
+                      Details →
+                    </Link>
                   </td>
                 </tr>
               ))}

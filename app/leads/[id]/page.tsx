@@ -129,12 +129,31 @@ export default async function LeadDetail({ params }: { params: Promise<{ id: str
                 </div>
               )}
 
-              {latestCall.recording_url && (
-                <div style={{ marginBottom: "16px" }} suppressHydrationWarning>
-                  <h3 style={{ fontSize: "14px", margin: "0 0 6px", color: "#163b2a" }} suppressHydrationWarning>🔊 Call Audio Recording</h3>
-                  <audio controls className="audio-player" src={latestCall.recording_url}>
+              {latestCall.recording_url ? (
+                <div style={{ marginBottom: "18px", background: "#f5f9f6", border: "1px solid #dbe6dd", borderRadius: "14px", padding: "16px" }} suppressHydrationWarning>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                    <h3 style={{ fontSize: "14px", margin: 0, color: "#163b2a", display: "flex", alignItems: "center", gap: "6px" }} suppressHydrationWarning>
+                      <span>🔊</span> Call Audio Recording
+                    </h3>
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                      <span className="badge completed" style={{ fontSize: "11px" }}>Saved in Supabase</span>
+                      <a
+                        href={latestCall.recording_url}
+                        download={`call-recording-${lead.first_name}-${latestCall.id.slice(0, 8)}.webm`}
+                        className="button secondary"
+                        style={{ padding: "4px 10px", fontSize: "11px", textDecoration: "none" }}
+                      >
+                        ⬇ Download
+                      </a>
+                    </div>
+                  </div>
+                  <audio controls className="audio-player" style={{ width: "100%", outline: "none", height: "42px" }} src={latestCall.recording_url}>
                     Your browser does not support the audio element.
                   </audio>
+                </div>
+              ) : (
+                <div className="alert info" style={{ margin: "0 0 16px" }}>
+                  ℹ️ Audio recording processing or saved as transcript.
                 </div>
               )}
 
