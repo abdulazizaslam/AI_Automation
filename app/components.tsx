@@ -62,7 +62,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
   const [callDuration, setCallDuration] = useState(0);
   const [callEnded, setCallEnded] = useState(false);
   const [summaryNote, setSummaryNote] = useState("");
-  const [micSupported, setMicSupported] = useState(true);
+  const [bestVoice, setBestVoice] = useState<SpeechSynthesisVoice | null>(null);
 
   const recognitionRef = useRef<any>(null);
   const historyRef = useRef<Array<{ role: "assistant" | "user"; content: string }>>([]);
@@ -71,8 +71,9 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
   const callEndedRef = useRef<boolean>(false);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastSpokenTextRef = useRef<string>("");
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
 
-  // Sync ref
+  // Sync state refs
   useEffect(() => {
     historyRef.current = history;
   }, [history]);
@@ -85,7 +86,49 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     callEndedRef.current = callEnded;
   }, [callEnded]);
 
-  // Call timer
+  // Load and select the most natural, human-sounding English voice available
+  useEffect(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+
+    function selectNaturalVoice() {
+      const voices = window.speechSynthesis.getVoices();
+      if (!voices.length) return;
+
+      // Priority list of high-definition, neural, and natural sounding voices
+      const priorityNames = [
+        "Microsoft Jenny Online (Natural)",
+        "Microsoft Guy Online (Natural)",
+        "Microsoft Aria Online (Natural)",
+        "Microsoft Christopher Online (Natural)",
+        "Google US English",
+        "Samantha (Enhanced)",
+        "Daniel (Enhanced)",
+        "Ava (Premium)",
+        "Natural",
+        "Neural"
+      ];
+
+      for (const name of priorityNames) {
+        const found = voices.find(v => v.name.includes(name) && v.lang.startsWith("en"));
+        if (found) {
+          setBestVoice(found);
+          return;
+        }
+      }
+
+      // Fallback to any en-US voice that isn't robotic David if possible
+      const enVoice = voices.find(v => v.lang === "en-US" && !v.name.toLowerCase().includes("david")) ||
+                      voices.find(v => v.lang.startsWith("en"));
+      if (enVoice) {
+        setBestVoice(enVoice);
+      }
+    }
+
+    selectNaturalVoice();
+    window.speechSynthesis.onvoiceschanged = selectNaturalVoice;
+  }, []);
+
+  // Call timer (stops strictly when callEnded is true)
   useEffect(() => {
     if (callEnded) return;
     const interval = setInterval(() => {
@@ -100,51 +143,205 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     return `${m}:${s}`;
   };
 
-  // Safe Speech Synthesis with Natural Voice
-  const speakVoice = useCallback((text: string) => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      setStatus("listening");
-      startListening();
-      return;
+  // Stop all microphone listening and clear pending timers
+  const stopListening = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
     }
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.abort();
+      } catch (e) {}
+      recognitionRef.current = null;
+    }
+  }, []);
 
-    window.speechSynthesis.cancel();
-    // Stop recognition while AI speaks to avoid feedback loop
+  // Natural Voice Speech Output with Strict End-of-Call Handling
+  const speakVoice = useCallback(async (text: string, isClosingTurn: boolean = false) => {
+    // 1. If call is ended by user, do not speak
+    if (callEndedRef.current && !isClosingTurn) return;
+
+    // 2. Immediately stop listening while AI speaks
     stopListening();
+    isSpeakingRef.current = true;
+    setStatus("speaking");
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.05;
-    utterance.pitch = 1.0;
+    // 3. Try Server-Side HD Audio TTS first (OpenAI / ElevenLabs if key exists)
+    try {
+      const ttsRes = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, voice: "alloy" })
+      });
 
-    // Pick best English voice
-    const voices = window.speechSynthesis.getVoices();
-    const naturalVoice = voices.find(v => (v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Samantha") || v.name.includes("Daniel") || v.name.includes("Alex")) && v.lang.startsWith("en")) || voices.find(v => v.lang.startsWith("en"));
-    if (naturalVoice) {
-      utterance.voice = naturalVoice;
+      const contentType = ttsRes.headers.get("Content-Type") || "";
+      if (ttsRes.ok && contentType.includes("audio")) {
+        const blob = await ttsRes.blob();
+        const audioUrl = URL.createObjectURL(blob);
+        const audio = new Audio(audioUrl);
+        audioPlayerRef.current = audio;
+
+        audio.onended = () => {
+          isSpeakingRef.current = false;
+          URL.revokeObjectURL(audioUrl);
+          if (isClosingTurn || callEndedRef.current) {
+            setStatus("ended");
+            stopListening();
+          } else {
+            setStatus("listening");
+            startListening();
+          }
+        };
+
+        audio.onerror = () => {
+          isSpeakingRef.current = false;
+          if (isClosingTurn || callEndedRef.current) {
+            setStatus("ended");
+            stopListening();
+          } else {
+            setStatus("listening");
+            startListening();
+          }
+        };
+
+        await audio.play();
+        return;
+      }
+    } catch (e) {
+      // Fallback to client browser synthesis
     }
 
-    utterance.onstart = () => {
-      isSpeakingRef.current = true;
-      setStatus("speaking");
-    };
+    // 4. Client-side Natural Voice Web Speech Synthesis Fallback
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
 
-    utterance.onend = () => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 0.98; // Warm conversational pacing
+      utterance.pitch = 1.0;
+
+      if (bestVoice) {
+        utterance.voice = bestVoice;
+      }
+
+      utterance.onstart = () => {
+        isSpeakingRef.current = true;
+        setStatus("speaking");
+      };
+
+      utterance.onend = () => {
+        isSpeakingRef.current = false;
+        // If this is the final closing line or appointment booked, permanently stop listening!
+        if (isClosingTurn || callEndedRef.current) {
+          setStatus("ended");
+          stopListening();
+        } else {
+          setStatus("listening");
+          startListening();
+        }
+      };
+
+      utterance.onerror = () => {
+        isSpeakingRef.current = false;
+        if (isClosingTurn || callEndedRef.current) {
+          setStatus("ended");
+          stopListening();
+        } else {
+          setStatus("listening");
+          startListening();
+        }
+      };
+
+      window.speechSynthesis.speak(utterance);
+    } else {
       isSpeakingRef.current = false;
-      if (!callEndedRef.current) {
+      if (isClosingTurn || callEndedRef.current) {
+        setStatus("ended");
+        stopListening();
+      } else {
         setStatus("listening");
         startListening();
       }
-    };
+    }
+  }, [bestVoice, stopListening]);
 
-    utterance.onerror = () => {
-      isSpeakingRef.current = false;
-      if (!callEndedRef.current) {
-        setStatus("listening");
-        startListening();
+  // Speech Recognition (Microphone listening)
+  const startListening = useCallback(() => {
+    // Strictly do NOT start listening if call has ended, muted, or AI is currently speaking
+    if (callEndedRef.current || isMutedRef.current || isSpeakingRef.current) return;
+    if (typeof window === "undefined") return;
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    try {
+      if (recognitionRef.current) {
+        recognitionRef.current.abort();
       }
-    };
 
-    window.speechSynthesis.speak(utterance);
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+
+      recognition.onstart = () => {
+        if (!isSpeakingRef.current && !callEndedRef.current) {
+          setStatus("listening");
+        }
+      };
+
+      recognition.onresult = (event: any) => {
+        if (isSpeakingRef.current || isMutedRef.current || callEndedRef.current) return;
+
+        let interim = "";
+        let final = "";
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            final += event.results[i][0].transcript;
+          } else {
+            interim += event.results[i][0].transcript;
+          }
+        }
+
+        const recognizedText = (final || interim).trim();
+        if (recognizedText) {
+          setLiveTranscript(recognizedText);
+          lastSpokenTextRef.current = recognizedText;
+
+          // Debounce / silence detection to trigger AI turn
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = setTimeout(() => {
+            if (lastSpokenTextRef.current && !isSpeakingRef.current && !callEndedRef.current) {
+              const textToSend = lastSpokenTextRef.current;
+              lastSpokenTextRef.current = "";
+              setLiveTranscript("");
+              sendVoiceTurn(textToSend);
+            }
+          }, 1300);
+        }
+      };
+
+      recognition.onerror = (e: any) => {
+        if (e.error !== "no-speech") {
+          console.warn("Speech recognition notice:", e.error);
+        }
+      };
+
+      recognition.onend = () => {
+        // Only restart if call is actively ongoing and agent is not speaking
+        if (!isSpeakingRef.current && !isMutedRef.current && !callEndedRef.current) {
+          try {
+            recognition.start();
+          } catch (e) {}
+        }
+      };
+
+      recognition.start();
+      recognitionRef.current = recognition;
+    } catch (e) {
+      console.warn("Could not start speech recognition:", e);
+    }
   }, []);
 
   // Send turn to backend
@@ -173,20 +370,20 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
 
       const data = await res.json();
       const agentMsg = data.agent_message || "Thank you for your time!";
+      const isClosing = Boolean(data.call_completed || data.appointment?.booked);
 
       const newHistory = [...updatedHistory, { role: "assistant" as const, content: agentMsg }];
       setHistory(newHistory);
       historyRef.current = newHistory;
 
-      // Speak agent response
-      speakVoice(agentMsg);
-
-      if (data.call_completed || data.appointment?.booked) {
+      // If call is finished (appointment booked or disqualified), mark callEnded immediately
+      if (isClosing) {
         setCallEnded(true);
         callEndedRef.current = true;
-        setSummaryNote(data.summary || "Call completed");
+        setSummaryNote(data.summary || "Call completed & appointment booked");
+        stopListening();
 
-        // Save completed call payload to backend
+        // Save completed call data to Supabase/backend
         await fetch("/api/voice-completion", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -203,6 +400,9 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
           })
         });
       }
+
+      // Speak agent response (with closing flag so it doesn't restart mic if finished)
+      speakVoice(agentMsg, isClosing);
     } catch (err) {
       console.error("Call turn processing error:", err);
       if (!callEndedRef.current) {
@@ -210,101 +410,13 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
         startListening();
       }
     }
-  }, [lead, call_id, speakVoice]);
+  }, [lead, call_id, speakVoice, stopListening, startListening]);
 
-  // Speech Recognition (Microphone listening)
-  const startListening = useCallback(() => {
-    if (isSpeakingRef.current || isMutedRef.current || callEndedRef.current) return;
-    if (typeof window === "undefined") return;
-
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setMicSupported(false);
-      return;
-    }
-
-    try {
-      if (recognitionRef.current) {
-        recognitionRef.current.abort();
-      }
-
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = "en-US";
-
-      recognition.onstart = () => {
-        if (!isSpeakingRef.current) setStatus("listening");
-      };
-
-      recognition.onresult = (event: any) => {
-        if (isSpeakingRef.current || isMutedRef.current) return;
-
-        let interim = "";
-        let final = "";
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            final += event.results[i][0].transcript;
-          } else {
-            interim += event.results[i][0].transcript;
-          }
-        }
-
-        const recognizedText = (final || interim).trim();
-        if (recognizedText) {
-          setLiveTranscript(recognizedText);
-          lastSpokenTextRef.current = recognizedText;
-
-          // Debounce / silence detection to trigger AI turn
-          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-          silenceTimerRef.current = setTimeout(() => {
-            if (lastSpokenTextRef.current && !isSpeakingRef.current) {
-              const textToSend = lastSpokenTextRef.current;
-              lastSpokenTextRef.current = "";
-              setLiveTranscript("");
-              sendVoiceTurn(textToSend);
-            }
-          }, 1400);
-        }
-      };
-
-      recognition.onerror = (e: any) => {
-        if (e.error !== "no-speech") {
-          console.warn("Speech recognition notice:", e.error);
-        }
-      };
-
-      recognition.onend = () => {
-        // Automatically restart listening if call is active and AI is not speaking
-        if (!isSpeakingRef.current && !isMutedRef.current && !callEndedRef.current) {
-          try {
-            recognition.start();
-          } catch (e) {}
-        }
-      };
-
-      recognition.start();
-      recognitionRef.current = recognition;
-    } catch (e) {
-      console.warn("Could not start speech recognition:", e);
-    }
-  }, [sendVoiceTurn]);
-
-  const stopListening = useCallback(() => {
-    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.abort();
-      } catch (e) {}
-    }
-  }, []);
-
-  // Initialize call with opening greeting
+  // Initial call connection
   useEffect(() => {
     const timer = setTimeout(() => {
       sendVoiceTurn();
-    }, 600);
+    }, 500);
 
     return () => {
       clearTimeout(timer);
@@ -312,8 +424,41 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
         window.speechSynthesis.cancel();
       }
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.pause();
+      }
     };
   }, []);
+
+  // Strict End Call function for user button
+  function handleEndCallByUser() {
+    setCallEnded(true);
+    callEndedRef.current = true;
+    stopListening();
+
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+    }
+
+    // Save whatever was discussed so far
+    fetch("/api/voice-completion", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        call_id,
+        call_status: "completed",
+        call_outcome: "Call Ended by User",
+        recording_url: "https://actions.google.com/sounds/v1/ambiences/office_voices.ogg",
+        transcript: historyRef.current.map(h => `${h.role === "assistant" ? "Alex (AI Agent)" : lead.first_name}: ${h.content}`).join("\n"),
+        summary: `Call ended with ${lead.first_name} ${lead.last_name}. Duration: ${formatDuration(callDuration)}.`
+      })
+    }).finally(() => {
+      onClose();
+    });
+  }
 
   function toggleMute() {
     const nextMute = !isMuted;
@@ -327,12 +472,6 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     }
   }
 
-  function handleManualSpeakPrompt(utterance: string) {
-    if (callEnded) return;
-    setLiveTranscript("");
-    sendVoiceTurn(utterance);
-  }
-
   const latestAssistantMessage = [...history].reverse().find(h => h.role === "assistant")?.content;
   const latestUserMessage = [...history].reverse().find(h => h.role === "user")?.content;
 
@@ -344,7 +483,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
           <div className="lead-title">
             <div className="call-badge-live">
               <span className="pulse-dot"></span>
-              {callEnded ? "CALL ENDED" : `LIVE SOLAR CALL · ${formatDuration(callDuration)}`}
+              {callEnded ? "CALL COMPLETED" : `LIVE SOLAR CALL · ${formatDuration(callDuration)}`}
             </div>
             <h3 style={{ marginTop: "4px", fontSize: "22px" }}>{lead.first_name} {lead.last_name}</h3>
             <p>📞 {lead.phone} · 📍 {lead.property_address || lead.address}</p>
@@ -353,15 +492,15 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
           <div className="status-indicator">
             {callEnded ? (
               <span className="badge completed" style={{ fontSize: "13px", padding: "6px 14px" }}>
-                ✓ Completed
+                ✓ Call Ended
               </span>
             ) : status === "speaking" ? (
               <span className="badge" style={{ background: "#e0f2fe", color: "#0369a1", fontSize: "13px", padding: "6px 14px" }}>
-                🔊 AI Agent Speaking
+                🔊 Alex Speaking...
               </span>
             ) : status === "processing" ? (
               <span className="badge pending" style={{ fontSize: "13px", padding: "6px 14px" }}>
-                ⏳ Processing Response...
+                ⏳ Processing...
               </span>
             ) : (
               <span className="badge completed" style={{ fontSize: "13px", padding: "6px 14px" }}>
@@ -384,10 +523,12 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
 
           <div className="call-agent-identity">
             <h4>Alex (Solar AI Voice Consultant)</h4>
-            <p className="muted">8-Step Script & Live Objection Intelligence Active</p>
+            <p className="muted" style={{ margin: "4px 0 10px", fontSize: "12px" }}>
+              {bestVoice ? `Voice: ${bestVoice.name.replace(/(Microsoft|Google|Desktop|Online \(Natural\))/g, "").trim() || "Natural Human"}` : "Natural Human Voice"}
+            </p>
           </div>
 
-          {/* Sound Wave Equalizer */}
+          {/* Sound Wave Equalizer (stops strictly when call ends) */}
           {!callEnded && (
             <div className={`sound-wave ${status === "speaking" ? "active-agent" : status === "listening" ? "active-user" : ""}`}>
               <div className="bar bar1"></div>
@@ -410,7 +551,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
               </div>
             )}
 
-            {(status === "listening" || status === "processing") && (
+            {(status === "listening" || status === "processing") && !callEnded && (
               <div className="caption user-caption">
                 <strong>🎙️ {lead.first_name} (You):</strong>{" "}
                 {liveTranscript ? `“${liveTranscript}”` : latestUserMessage ? `“${latestUserMessage}”` : "Speak into your microphone naturally..."}
@@ -418,51 +559,47 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
             )}
 
             {callEnded && (
-              <div className="caption completed-caption">
-                <strong>✅ Call Completed:</strong> {summaryNote || "Lead qualification data & appointment saved to database."}
+              <div className="caption completed-caption" style={{ width: "100%" }}>
+                <div style={{ fontSize: "15px", marginBottom: "4px" }}>✅ <strong>Call Finished & Saved</strong></div>
+                <div style={{ fontSize: "13px", color: "#166534", fontWeight: "normal" }}>
+                  {summaryNote || "Appointment and qualification data recorded."}
+                </div>
               </div>
             )}
           </div>
         </div>
 
-        {/* Quick Voice Shortcuts for Testing Without Voice if No Mic */}
-        {!micSupported && (
-          <div className="alert info" style={{ margin: "0" }}>
-            Microphone access is not supported in this browser window. Click below to test responses:
-            <div style={{ display: "flex", gap: "6px", marginTop: "8px", flexWrap: "wrap" }}>
-              <button className="chip-btn" onClick={() => handleManualSpeakPrompt("Yes I own the home and my bill is $220")}>
-                "I own the home, bill $220/mo"
-              </button>
-              <button className="chip-btn" onClick={() => handleManualSpeakPrompt("I'm not interested")}>
-                "I'm not interested" (AIR test)
-              </button>
-              <button className="chip-btn" onClick={() => handleManualSpeakPrompt("Friday 3 PM works")}>
-                "Friday 3 PM works" (Book)
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Call Controls HUD */}
         <div className="call-controls-hud">
-          <button
-            className={`hud-btn ${isMuted ? "muted" : ""}`}
-            onClick={toggleMute}
-            disabled={callEnded}
-            title={isMuted ? "Unmute Mic" : "Mute Mic"}
-          >
-            <span>{isMuted ? "🔇" : "🎙️"}</span>
-            <small>{isMuted ? "Unmute" : "Mute"}</small>
-          </button>
+          {!callEnded ? (
+            <>
+              <button
+                className={`hud-btn ${isMuted ? "muted" : ""}`}
+                onClick={toggleMute}
+                title={isMuted ? "Unmute Mic" : "Mute Mic"}
+              >
+                <span>{isMuted ? "🔇" : "🎙️"}</span>
+                <small>{isMuted ? "Unmute" : "Mute"}</small>
+              </button>
 
-          <button
-            className="hud-btn danger"
-            onClick={onClose}
-            style={{ minWidth: "160px" }}
-          >
-            <span>{callEnded ? "✓" : "📞"}</span>
-            <small>{callEnded ? "Close & View Dashboard" : "End Call"}</small>
-          </button>
+              <button
+                className="hud-btn danger"
+                onClick={handleEndCallByUser}
+                style={{ minWidth: "150px" }}
+              >
+                <span>📞</span>
+                <small>End Call</small>
+              </button>
+            </>
+          ) : (
+            <button
+              className="button"
+              onClick={onClose}
+              style={{ width: "100%", padding: "14px", fontSize: "15px" }}
+            >
+              ✓ Close & View Saved Data in Dashboard →
+            </button>
+          )}
         </div>
       </div>
     </div>
