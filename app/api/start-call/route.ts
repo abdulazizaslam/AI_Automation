@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export async function POST() {
   try {
     const db = getSupabaseAdmin();
-    const { data: leads, error: leadError } = await db.from("leads").select("id, first_name, last_name, phone, email, property_address, address");
+    const { data: leads, error: leadError } = await db.from("leads").select("*");
     if (leadError) throw leadError;
     if (!leads || !leads.length) return NextResponse.json({ error: "No test leads available" }, { status: 404 });
 

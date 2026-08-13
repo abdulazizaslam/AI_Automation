@@ -10,6 +10,26 @@ type CallSession = {
   n8n_triggered?: boolean;
 };
 
+export function DashboardAutoRefresher({ intervalMs = 4000 }: { intervalMs?: number }) {
+  const router = useRouter();
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      router.refresh();
+    }, intervalMs);
+
+    const onFocus = () => router.refresh();
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [router, intervalMs]);
+
+  return null;
+}
+
 export function StartCallButton() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");

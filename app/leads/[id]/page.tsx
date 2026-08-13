@@ -1,8 +1,11 @@
 import Link from "next/link";
 import { getSupabaseAdmin, getMockLeadById } from "@/lib/supabase";
+import { DashboardAutoRefresher } from "@/app/components";
 import type { Lead, Call, Qualification, Appointment } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
 
 export default async function LeadDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -34,6 +37,7 @@ export default async function LeadDetail({ params }: { params: Promise<{ id: str
 
   return (
     <div suppressHydrationWarning>
+      <DashboardAutoRefresher />
       <div className="hero" suppressHydrationWarning>
         <div suppressHydrationWarning>
           <Link href="/leads" style={{ textDecoration: "none", color: "#246b48", fontWeight: 700, fontSize: "14px" }}>

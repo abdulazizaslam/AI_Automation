@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { StartCallButton } from "./components";
+import { StartCallButton, DashboardAutoRefresher } from "./components";
 import type { Call, Appointment, Lead } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
 
 export default async function Dashboard() {
   let leads: Lead[] = [];
@@ -29,6 +31,7 @@ export default async function Dashboard() {
 
   return (
     <div suppressHydrationWarning>
+      <DashboardAutoRefresher />
       <div className="hero" suppressHydrationWarning>
         <div suppressHydrationWarning>
           <div className="eyebrow" suppressHydrationWarning>Solar Automation Pipeline</div>
