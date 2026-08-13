@@ -1,3 +1,8 @@
+# Dependencies & build output
+node_modules/
+.next/
+*.tsbuildinfo
+
 # Claude Code local state and temporary worktrees
 .claude/settings.local.json
 .claude/worktrees/
