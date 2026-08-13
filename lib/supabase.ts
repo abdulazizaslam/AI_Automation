@@ -9,10 +9,20 @@ export const defaultSeedLeads: Lead[] = [
   { id: "55555555-5555-4555-a555-555555555555", first_name: "Emily", last_name: "Davis", email: "emily.davis@example.com", phone: "+15550100005", property_address: "505 Ray Court", address: "505 Ray Court", lead_status: "new", created_at: new Date().toISOString() }
 ];
 
-const mockLeadsStore: Lead[] = [...defaultSeedLeads];
-const mockCallsStore: Call[] = [];
-const mockQualificationsStore: Qualification[] = [];
-const mockAppointmentsStore: Appointment[] = [];
+const globalAny = globalThis as any;
+if (!globalAny.mockStore) {
+  globalAny.mockStore = {
+    leads: [...defaultSeedLeads],
+    calls: [],
+    qualifications: [],
+    appointments: []
+  };
+}
+
+const mockLeadsStore: Lead[] = globalAny.mockStore.leads;
+const mockCallsStore: Call[] = globalAny.mockStore.calls;
+const mockQualificationsStore: Qualification[] = globalAny.mockStore.qualifications;
+const mockAppointmentsStore: Appointment[] = globalAny.mockStore.appointments;
 
 export function getSupabaseUrlAndKey() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://drpymjqvyetxhszhxtdd.supabase.co";
