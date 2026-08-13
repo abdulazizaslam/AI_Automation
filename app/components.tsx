@@ -115,20 +115,23 @@ export function ResetDatabaseButton() {
   return (
     <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", whiteSpace: "nowrap" }}>
       <button
-        className="button secondary"
+        className="button danger"
         onClick={handleReset}
         disabled={loading}
         style={{
-          border: "1px solid #d0ded4",
-          color: "#4a5d52",
-          fontSize: "13px",
+          background: "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)",
+          border: "1px solid #b91c1c",
+          color: "#ffffff",
+          fontWeight: 700,
+          fontSize: "13.5px",
           height: "44px",
           padding: "0 16px",
           display: "inline-flex",
           alignItems: "center",
-          gap: "6px",
+          gap: "7px",
           whiteSpace: "nowrap",
-          boxSizing: "border-box"
+          boxSizing: "border-box",
+          boxShadow: "0 4px 14px rgba(239, 68, 68, 0.35)"
         }}
         title="Clears calls, qualifications, and appointments while preserving all leads"
       >
