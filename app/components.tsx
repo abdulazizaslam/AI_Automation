@@ -115,7 +115,7 @@ export function ResetDatabaseButton() {
   }
 
   return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", whiteSpace: "nowrap" }}>
+    <div suppressHydrationWarning style={{ display: "inline-flex", alignItems: "center", gap: "6px", whiteSpace: "nowrap" }}>
       <button
         className="button danger"
         onClick={handleReset}
