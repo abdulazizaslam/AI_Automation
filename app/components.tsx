@@ -290,6 +290,9 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
   const speakVoice = useCallback((text: string, isClosingTurn: boolean = false) => {
     if (callEndedRef.current) return;
 
+    // Stop recognition while agent is speaking to prevent echo pickup
+    stopListening();
+
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
 
@@ -312,7 +315,9 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
           setStatus("ended");
           stopListening();
         } else {
+          // CRITICAL: restart speech recognition after agent finishes speaking
           setStatus("listening");
+          startListening();
         }
       };
 
@@ -323,6 +328,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
           stopListening();
         } else {
           setStatus("listening");
+          startListening();
         }
       };
 
@@ -334,9 +340,10 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
         stopListening();
       } else {
         setStatus("listening");
+        startListening();
       }
     }
-  }, [bestVoice, stopListening]);
+  }, [bestVoice, stopListening, startListening]);
 
   // Send turn to backend
   const sendVoiceTurn = useCallback(async (userUtterance?: string) => {
@@ -403,7 +410,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     }
   }, [lead, call_id, speakVoice, stopListening, getAudioRecordingUrl]);
 
-  // Speech Recognition (Duplex Fallback)
+  // Speech Recognition
   const startListening = useCallback(() => {
     if (callEndedRef.current || isMutedRef.current) return;
     if (typeof window === "undefined") return;
@@ -414,6 +421,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     try {
       if (recognitionRef.current) {
         try { recognitionRef.current.abort(); } catch (e) {}
+        recognitionRef.current = null;
       }
 
       const recognition = new SpeechRecognition();
@@ -429,6 +437,8 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
 
       recognition.onresult = (event: any) => {
         if (isMutedRef.current || callEndedRef.current) return;
+        // Ignore any speech picked up while agent is speaking (echo)
+        if (isSpeakingRef.current) return;
 
         let interim = "";
         let final = "";
@@ -443,21 +453,12 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
 
         const recognizedText = (final || interim).trim();
 
-        if (isSpeakingRef.current && recognizedText.length > 0) {
-          if (typeof window !== "undefined" && "speechSynthesis" in window) {
-            window.speechSynthesis.cancel();
-          }
-          if (audioPlayerRef.current) {
-            audioPlayerRef.current.pause();
-          }
-          isSpeakingRef.current = false;
-          setStatus("listening");
-        }
-
         if (recognizedText) {
           setLiveTranscript(recognizedText);
           lastSpokenTextRef.current = recognizedText;
+          setStatus("listening");
 
+          // Wait for user to finish talking before sending to agent
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = setTimeout(() => {
             if (lastSpokenTextRef.current && !callEndedRef.current) {
@@ -466,20 +467,33 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
               setLiveTranscript("");
               sendVoiceTurn(textToSend);
             }
-          }, 550);
+          }, 1200);
         }
       };
 
       recognition.onerror = (e: any) => {
-        if (e.error !== "no-speech") {
+        if (e.error !== "no-speech" && e.error !== "aborted") {
           console.warn("Speech recognition notice:", e.error);
+        }
+        // On network or not-allowed errors, retry after delay
+        if (e.error === "network" || e.error === "service-not-available") {
+          setTimeout(() => {
+            if (!callEndedRef.current && !isMutedRef.current && !isSpeakingRef.current) {
+              startListening();
+            }
+          }, 1000);
         }
       };
 
       recognition.onend = () => {
-        if (!callEndedRef.current && !isMutedRef.current) {
+        // Only auto-restart if call is active, not muted, and agent is not speaking
+        if (!callEndedRef.current && !isMutedRef.current && !isSpeakingRef.current) {
           try {
-            recognition.start();
+            setTimeout(() => {
+              if (!callEndedRef.current && !isMutedRef.current && !isSpeakingRef.current) {
+                recognition.start();
+              }
+            }, 100);
           } catch (e) {}
         }
       };
@@ -548,16 +562,13 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
           console.warn("Audio analyser notice:", err);
         }
 
-        // Start listening & immediately trigger Agent's Step 1 Opening Hook!
-        startListening();
+        // Agent speaks opening hook first. speakVoice() will start listening after speech ends.
         sendVoiceTurn();
       }).catch((err) => {
         console.warn("Microphone access notice:", err);
-        startListening();
         sendVoiceTurn();
       });
     } else {
-      startListening();
       sendVoiceTurn();
     }
 
