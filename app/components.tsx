@@ -1,22 +1,23 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import type { Lead } from "@/lib/types";
 
-type CallSession = {
+export interface CallSession {
   call_id: string;
   lead: Lead;
   n8n_triggered?: boolean;
-};
+}
 
-export function DashboardAutoRefresher({ intervalMs = 4000 }: { intervalMs?: number }) {
+export function DashboardAutoRefresher() {
   const router = useRouter();
 
   useEffect(() => {
     const interval = setInterval(() => {
       router.refresh();
-    }, intervalMs);
+    }, 4000);
 
     const onFocus = () => router.refresh();
     window.addEventListener("focus", onFocus);
@@ -25,7 +26,7 @@ export function DashboardAutoRefresher({ intervalMs = 4000 }: { intervalMs?: num
       clearInterval(interval);
       window.removeEventListener("focus", onFocus);
     };
-  }, [router, intervalMs]);
+  }, [router]);
 
   return null;
 }
@@ -150,7 +151,6 @@ export function ResetDatabaseButton() {
   );
 }
 
-
 function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; onClose: () => void }) {
   const { lead, call_id } = session;
   const [history, setHistory] = useState<Array<{ role: "assistant" | "user"; content: string }>>([]);
@@ -161,6 +161,8 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
   const [callEnded, setCallEnded] = useState(false);
   const [summaryNote, setSummaryNote] = useState("");
   const [bestVoice, setBestVoice] = useState<SpeechSynthesisVoice | null>(null);
+  const [micVolume, setMicVolume] = useState<number>(0);
+  const [customUtterance, setCustomUtterance] = useState("");
 
   const recognitionRef = useRef<any>(null);
   const historyRef = useRef<Array<{ role: "assistant" | "user"; content: string }>>([]);
@@ -173,6 +175,9 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animFrameRef = useRef<number | null>(null);
 
   // Sync state refs
   useEffect(() => {
@@ -187,11 +192,15 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     callEndedRef.current = callEnded;
   }, [callEnded]);
 
-  // Start live audio recorder on microphone stream
+  // Audio recording & Realtime Microphone Volume Analyser
   useEffect(() => {
     if (typeof window !== "undefined" && navigator.mediaDevices?.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+      navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      }).then(stream => {
         mediaStreamRef.current = stream;
+
+        // 1. Media Recorder
         try {
           recordedChunksRef.current = [];
           const mimeType = (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported("audio/webm")) ? "audio/webm" : "";
@@ -206,12 +215,44 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
         } catch (err) {
           console.warn("MediaRecorder start notice:", err);
         }
+
+        // 2. Real-time AudioContext Volume Analyser
+        try {
+          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+          if (AudioContextClass) {
+            const ctx = new AudioContextClass();
+            audioContextRef.current = ctx;
+            const source = ctx.createMediaStreamSource(stream);
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 64;
+            source.connect(analyser);
+            analyserRef.current = analyser;
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            const checkVolume = () => {
+              if (callEndedRef.current) return;
+              analyser.getByteFrequencyData(dataArray);
+              let sum = 0;
+              for (let i = 0; i < dataArray.length; i++) {
+                sum += dataArray[i];
+              }
+              const avg = sum / dataArray.length;
+              setMicVolume(Math.min(100, Math.round((avg / 128) * 100)));
+              animFrameRef.current = requestAnimationFrame(checkVolume);
+            };
+            checkVolume();
+          }
+        } catch (err) {
+          console.warn("Audio analyser notice:", err);
+        }
       }).catch(err => {
-        console.warn("Audio recording access denied:", err);
+        console.warn("Audio stream access notice:", err);
       });
     }
 
     return () => {
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      if (audioContextRef.current) audioContextRef.current.close().catch(() => {});
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
         try { mediaRecorderRef.current.stop(); } catch (e) {}
       }
@@ -247,7 +288,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     return "https://actions.google.com/sounds/v1/ambiences/office_voices.ogg";
   }, []);
 
-  // Load and select the most natural, human-sounding English voice available
+  // Natural Human Voice Selector
   useEffect(() => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
 
@@ -255,7 +296,6 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
       const voices = window.speechSynthesis.getVoices();
       if (!voices.length) return;
 
-      // Priority list of high-definition, neural, and natural sounding voices
       const priorityNames = [
         "Microsoft Jenny Online (Natural)",
         "Microsoft Guy Online (Natural)",
@@ -277,7 +317,6 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
         }
       }
 
-      // Fallback to any en-US voice that isn't robotic David if possible
       const enVoice = voices.find(v => v.lang === "en-US" && !v.name.toLowerCase().includes("david")) ||
                       voices.find(v => v.lang.startsWith("en"));
       if (enVoice) {
@@ -289,7 +328,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     window.speechSynthesis.onvoiceschanged = selectNaturalVoice;
   }, []);
 
-  // Call timer (stops strictly when callEnded is true)
+  // Call timer
   useEffect(() => {
     if (callEnded) return;
     const interval = setInterval(() => {
@@ -304,132 +343,9 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     return `${m}:${s}`;
   };
 
-  // Stop all microphone listening and clear pending timers
-  const stopListening = useCallback(() => {
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.abort();
-      } catch (e) {}
-      recognitionRef.current = null;
-    }
-  }, []);
-
-  // Natural Voice Speech Output with Strict End-of-Call Handling
-  const speakVoice = useCallback(async (text: string, isClosingTurn: boolean = false) => {
-    // 1. If call is ended by user, do not speak
-    if (callEndedRef.current && !isClosingTurn) return;
-
-    // 2. Immediately stop listening while AI speaks
-    stopListening();
-    isSpeakingRef.current = true;
-    setStatus("speaking");
-
-    // 3. Try Server-Side HD Audio TTS first (OpenAI / ElevenLabs if key exists)
-    try {
-      const ttsRes = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, voice: "alloy" })
-      });
-
-      const contentType = ttsRes.headers.get("Content-Type") || "";
-      if (ttsRes.ok && contentType.includes("audio")) {
-        const blob = await ttsRes.blob();
-        const audioUrl = URL.createObjectURL(blob);
-        const audio = new Audio(audioUrl);
-        audioPlayerRef.current = audio;
-
-        audio.onended = () => {
-          isSpeakingRef.current = false;
-          URL.revokeObjectURL(audioUrl);
-          if (isClosingTurn || callEndedRef.current) {
-            setStatus("ended");
-            stopListening();
-          } else {
-            setStatus("listening");
-            startListening();
-          }
-        };
-
-        audio.onerror = () => {
-          isSpeakingRef.current = false;
-          if (isClosingTurn || callEndedRef.current) {
-            setStatus("ended");
-            stopListening();
-          } else {
-            setStatus("listening");
-            startListening();
-          }
-        };
-
-        await audio.play();
-        return;
-      }
-    } catch (e) {
-      // Fallback to client browser synthesis
-    }
-
-    // 4. Client-side Natural Voice Web Speech Synthesis Fallback
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.98; // Warm conversational pacing
-      utterance.pitch = 1.0;
-
-      if (bestVoice) {
-        utterance.voice = bestVoice;
-      }
-
-      utterance.onstart = () => {
-        isSpeakingRef.current = true;
-        setStatus("speaking");
-      };
-
-      utterance.onend = () => {
-        isSpeakingRef.current = false;
-        // If this is the final closing line or appointment booked, permanently stop listening!
-        if (isClosingTurn || callEndedRef.current) {
-          setStatus("ended");
-          stopListening();
-        } else {
-          setStatus("listening");
-          startListening();
-        }
-      };
-
-      utterance.onerror = () => {
-        isSpeakingRef.current = false;
-        if (isClosingTurn || callEndedRef.current) {
-          setStatus("ended");
-          stopListening();
-        } else {
-          setStatus("listening");
-          startListening();
-        }
-      };
-
-      window.speechSynthesis.speak(utterance);
-    } else {
-      isSpeakingRef.current = false;
-      if (isClosingTurn || callEndedRef.current) {
-        setStatus("ended");
-        stopListening();
-      } else {
-        setStatus("listening");
-        startListening();
-      }
-    }
-  }, [bestVoice, stopListening]);
-
-  // Speech Recognition (Microphone listening)
+  // Continuous Speech Recognition (Microphone listening)
   const startListening = useCallback(() => {
-    // Strictly do NOT start listening if call has ended, muted, or AI is currently speaking
-    if (callEndedRef.current || isMutedRef.current || isSpeakingRef.current) return;
+    if (callEndedRef.current || isMutedRef.current) return;
     if (typeof window === "undefined") return;
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -437,7 +353,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
 
     try {
       if (recognitionRef.current) {
-        recognitionRef.current.abort();
+        try { recognitionRef.current.abort(); } catch (e) {}
       }
 
       const recognition = new SpeechRecognition();
@@ -468,7 +384,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
         const recognizedText = (final || interim).trim();
 
         // 1. LIVE BARGE-IN: If the user starts speaking while the AI is talking, immediately cut off the AI!
-        if (isSpeakingRef.current && recognizedText.length > 1) {
+        if (isSpeakingRef.current && recognizedText.length > 0) {
           if (typeof window !== "undefined" && "speechSynthesis" in window) {
             window.speechSynthesis.cancel();
           }
@@ -483,7 +399,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
           setLiveTranscript(recognizedText);
           lastSpokenTextRef.current = recognizedText;
 
-          // 2. ULTRA-FAST REALTIME TURN: Respond in 650ms after user finishes sentence
+          // 2. ULTRA-FAST REALTIME TURN: Respond in 550ms after user pauses speaking
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = setTimeout(() => {
             if (lastSpokenTextRef.current && !callEndedRef.current) {
@@ -492,7 +408,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
               setLiveTranscript("");
               sendVoiceTurn(textToSend);
             }
-          }, 650);
+          }, 550);
         }
       };
 
@@ -503,8 +419,8 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
       };
 
       recognition.onend = () => {
-        // Only restart if call is actively ongoing and agent is not speaking
-        if (!isSpeakingRef.current && !isMutedRef.current && !callEndedRef.current) {
+        // ALWAYS auto-restart continuous listening so duplex never drops
+        if (!callEndedRef.current && !isMutedRef.current) {
           try {
             recognition.start();
           } catch (e) {}
@@ -514,15 +430,77 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
       recognition.start();
       recognitionRef.current = recognition;
     } catch (e) {
-      console.warn("Could not start speech recognition:", e);
+      console.warn("Speech recognition init notice:", e);
     }
   }, []);
+
+  const stopListening = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch (e) {}
+      recognitionRef.current = null;
+    }
+  }, []);
+
+  // Natural Voice Speech Output
+  const speakVoice = useCallback((text: string, isClosingTurn: boolean = false) => {
+    if (callEndedRef.current) return;
+
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.04; // Natural brisk conversational cadence
+      utterance.pitch = 1.0;
+
+      if (bestVoice) {
+        utterance.voice = bestVoice;
+      }
+
+      utterance.onstart = () => {
+        isSpeakingRef.current = true;
+        setStatus("speaking");
+      };
+
+      utterance.onend = () => {
+        isSpeakingRef.current = false;
+        if (isClosingTurn || callEndedRef.current) {
+          setStatus("ended");
+          stopListening();
+        } else {
+          setStatus("listening");
+        }
+      };
+
+      utterance.onerror = () => {
+        isSpeakingRef.current = false;
+        if (isClosingTurn || callEndedRef.current) {
+          setStatus("ended");
+          stopListening();
+        } else {
+          setStatus("listening");
+        }
+      };
+
+      window.speechSynthesis.speak(utterance);
+    } else {
+      isSpeakingRef.current = false;
+      if (isClosingTurn || callEndedRef.current) {
+        setStatus("ended");
+        stopListening();
+      } else {
+        setStatus("listening");
+      }
+    }
+  }, [bestVoice, stopListening]);
 
   // Send turn to backend
   const sendVoiceTurn = useCallback(async (userUtterance?: string) => {
     if (callEndedRef.current) return;
     setStatus("processing");
-    stopListening();
 
     let updatedHistory = [...historyRef.current];
     if (userUtterance) {
@@ -550,17 +528,14 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
       setHistory(newHistory);
       historyRef.current = newHistory;
 
-      // If call is finished (appointment booked or disqualified), mark callEnded immediately
       if (isClosing) {
         setCallEnded(true);
         callEndedRef.current = true;
         setSummaryNote(data.summary || "Call completed & appointment booked");
         stopListening();
 
-        // Get actual recorded audio data URL
         const finalRecordingUrl = await getAudioRecordingUrl();
 
-        // Save completed call data to Supabase/backend
         await fetch("/api/voice-completion", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -578,22 +553,21 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
         });
       }
 
-      // Speak agent response (with closing flag so it doesn't restart mic if finished)
       speakVoice(agentMsg, isClosing);
     } catch (err) {
-      console.error("Call turn processing error:", err);
+      console.error("Call turn error:", err);
       if (!callEndedRef.current) {
         setStatus("listening");
-        startListening();
       }
     }
-  }, [lead, call_id, speakVoice, stopListening, startListening, getAudioRecordingUrl]);
+  }, [lead, call_id, speakVoice, stopListening, getAudioRecordingUrl]);
 
   // Initial call connection
   useEffect(() => {
+    startListening();
     const timer = setTimeout(() => {
       sendVoiceTurn();
-    }, 500);
+    }, 400);
 
     return () => {
       clearTimeout(timer);
@@ -607,7 +581,6 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     };
   }, []);
 
-  // Strict End Call function for user button
   async function handleEndCallByUser() {
     setCallEnded(true);
     callEndedRef.current = true;
@@ -622,7 +595,6 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
 
     const finalRecordingUrl = await getAudioRecordingUrl();
 
-    // Save whatever was discussed so far
     fetch("/api/voice-completion", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -651,78 +623,91 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     }
   }
 
+  function triggerCustomSpeech(text: string) {
+    if (!text.trim() || callEnded) return;
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    isSpeakingRef.current = false;
+    sendVoiceTurn(text.trim());
+    setCustomUtterance("");
+  }
+
   const latestAssistantMessage = [...history].reverse().find(h => h.role === "assistant")?.content;
   const latestUserMessage = [...history].reverse().find(h => h.role === "user")?.content;
 
   return (
     <div className="modal-overlay">
-      <div className="modal-card voice-agent-modal">
-        {/* Call Header */}
+      <div className="voice-agent-modal">
+        {/* Header */}
         <div className="call-header">
           <div className="lead-title">
             <div className="call-badge-live">
-              <span className="pulse-dot"></span>
-              {callEnded ? "CALL COMPLETED" : `LIVE SOLAR CALL · ${formatDuration(callDuration)}`}
+              <span className="pulse-dot" />
+              <span>{callEnded ? "SESSION TERMINATED" : `REALTIME DUPLEX CALL · ${formatDuration(callDuration)}`}</span>
             </div>
-            <h3 style={{ marginTop: "4px", fontSize: "22px" }}>{lead.first_name} {lead.last_name}</h3>
+            <h3>{lead.first_name} {lead.last_name}</h3>
             <p>📞 {lead.phone} · 📍 {lead.property_address || lead.address}</p>
           </div>
 
           <div className="status-indicator">
             {callEnded ? (
-              <span className="badge completed" style={{ fontSize: "13px", padding: "6px 14px" }}>
-                ✓ Call Ended
+              <span className="badge completed" style={{ fontSize: "12px", padding: "6px 12px" }}>
+                ✓ Completed
               </span>
             ) : status === "speaking" ? (
-              <span className="badge" style={{ background: "#e0f2fe", color: "#0369a1", fontSize: "13px", padding: "6px 14px" }}>
+              <span className="badge" style={{ background: "rgba(6, 182, 212, 0.15)", borderColor: "rgba(6, 182, 212, 0.4)", color: "#38bdf8", fontSize: "12px", padding: "6px 12px" }}>
                 🔊 Alex Speaking...
               </span>
             ) : status === "processing" ? (
-              <span className="badge pending" style={{ fontSize: "13px", padding: "6px 14px" }}>
-                ⏳ Processing...
+              <span className="badge pending" style={{ fontSize: "12px", padding: "6px 12px" }}>
+                ⚡ Thinking...
               </span>
             ) : (
-              <span className="badge completed" style={{ fontSize: "13px", padding: "6px 14px" }}>
-                🎙️ Listening to You...
+              <span className="badge completed" style={{ fontSize: "12px", padding: "6px 12px" }}>
+                🎙️ Mic Active & Listening...
               </span>
             )}
           </div>
         </div>
 
-        {/* Live Audio Visualizer / Calling Interface */}
+        {/* Screen */}
         <div className="voice-call-screen">
           <div className={`caller-avatar ${status === "speaking" ? "speaking" : status === "listening" ? "listening" : ""}`}>
-            <span className="avatar-icon">☀️</span>
+            <span style={{ fontSize: "32px" }}>⚡</span>
             <div className="sound-ripples">
-              <span></span>
-              <span></span>
-              <span></span>
+              <span />
+              <span />
+              <span />
             </div>
           </div>
 
           <div className="call-agent-identity">
-            <h4>Alex (Solar AI Voice Consultant)</h4>
+            <h4>Alex · Autonomous Solar Consultant</h4>
             <p className="muted" style={{ margin: "4px 0 10px", fontSize: "12px" }}>
-              {bestVoice ? `Voice: ${bestVoice.name.replace(/(Microsoft|Google|Desktop|Online \(Natural\))/g, "").trim() || "Natural Human"}` : "Natural Human Voice"}
+              {bestVoice ? `Voice Profile: ${bestVoice.name.replace(/(Microsoft|Google|Desktop|Online \(Natural\))/g, "").trim()}` : "Neural Voice Engine"}
             </p>
           </div>
 
-          {/* Sound Wave Equalizer (stops strictly when call ends) */}
+          {/* Dynamic Soundwave (Reacts to live mic volume) */}
           {!callEnded && (
-            <div className={`sound-wave ${status === "speaking" ? "active-agent" : status === "listening" ? "active-user" : ""}`}>
-              <div className="bar bar1"></div>
-              <div className="bar bar2"></div>
-              <div className="bar bar3"></div>
-              <div className="bar bar4"></div>
-              <div className="bar bar5"></div>
-              <div className="bar bar6"></div>
-              <div className="bar bar7"></div>
-              <div className="bar bar8"></div>
-              <div className="bar bar9"></div>
+            <div className={`sound-wave ${status === "speaking" ? "active-agent" : "active-user"}`} style={{ height: "36px" }}>
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => {
+                const heightVal = status === "speaking"
+                  ? Math.max(6, (i % 3 + 1) * 8)
+                  : Math.max(6, Math.min(32, Math.round((micVolume / 100) * 32 + (i % 2) * 6)));
+                return (
+                  <div
+                    key={i}
+                    className={`bar bar${i}`}
+                    style={{ height: `${heightVal}px`, transition: "height 0.1s ease" }}
+                  />
+                );
+              })}
             </div>
           )}
 
-          {/* Live Subtitle / Transcript Banner */}
+          {/* Live Captions */}
           <div className="live-caption-box">
             {status === "speaking" && latestAssistantMessage && (
               <div className="caption agent-caption">
@@ -733,22 +718,57 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
             {(status === "listening" || status === "processing") && !callEnded && (
               <div className="caption user-caption">
                 <strong>🎙️ {lead.first_name} (You):</strong>{" "}
-                {liveTranscript ? `“${liveTranscript}”` : latestUserMessage ? `“${latestUserMessage}”` : "Speak into your microphone naturally..."}
+                {liveTranscript ? (
+                  <span style={{ color: "#34d399", fontWeight: 700 }}>“{liveTranscript}”</span>
+                ) : latestUserMessage ? (
+                  `“${latestUserMessage}”`
+                ) : (
+                  <span style={{ color: "var(--text-muted)" }}>Speak into your microphone naturally...</span>
+                )}
               </div>
             )}
 
             {callEnded && (
               <div className="caption completed-caption" style={{ width: "100%" }}>
-                <div style={{ fontSize: "15px", marginBottom: "4px" }}>✅ <strong>Call Finished & Saved</strong></div>
-                <div style={{ fontSize: "13px", color: "#166534", fontWeight: "normal" }}>
-                  {summaryNote || "Appointment and qualification data recorded."}
+                <div style={{ fontSize: "14px", fontWeight: 700 }}>✅ Call Concluded & Saved</div>
+                <div style={{ fontSize: "12.5px", marginTop: "4px", color: "var(--text-secondary)" }}>
+                  {summaryNote || "Qualification data and consultation logged into Supabase."}
                 </div>
               </div>
             )}
           </div>
         </div>
 
-        {/* Call Controls HUD */}
+        {/* Quick Voice Chips (One-Tap Test Dialogue) */}
+        {!callEnded && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", display: "flex", justifyContent: "space-between" }}>
+              <span>💬 Live Voice or One-Tap Homeowner Responses:</span>
+              <span style={{ color: "var(--accent-emerald)" }}>⚡ Mic Continuous Open</span>
+            </div>
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+              {[
+                "Yes, I own the home",
+                "My electric bill is about $220",
+                "How does the SGIP program work?",
+                "I'm not interested",
+                "Friday afternoon works great",
+                "Can you send me an email?"
+              ].map((phrase, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => triggerCustomSpeech(phrase)}
+                  className="button secondary"
+                  style={{ padding: "6px 12px", fontSize: "12px", height: "32px", borderRadius: "8px" }}
+                >
+                  &ldquo;{phrase}&rdquo;
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Controls */}
         <div className="call-controls-hud">
           {!callEnded ? (
             <>
@@ -764,19 +784,19 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
               <button
                 className="hud-btn danger"
                 onClick={handleEndCallByUser}
-                style={{ minWidth: "150px" }}
+                style={{ minWidth: "160px", padding: "10px 24px" }}
               >
-                <span>📞</span>
-                <small>End Call</small>
+                <span style={{ fontSize: "20px" }}>📞</span>
+                <small style={{ fontSize: "13px" }}>End Call</small>
               </button>
             </>
           ) : (
             <button
               className="button"
               onClick={onClose}
-              style={{ width: "100%", padding: "14px", fontSize: "15px" }}
+              style={{ width: "100%", height: "48px", fontSize: "14px" }}
             >
-              ✓ Close & View Saved Data in Dashboard →
+              ✓ Close Terminal & Review Records →
             </button>
           )}
         </div>
