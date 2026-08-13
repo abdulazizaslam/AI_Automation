@@ -1,5 +1,14 @@
-import { voice, defineAgent, type JobContext } from "@livekit/agents";
+import dotenv from "dotenv";
+dotenv.config({ path: ".env.local" });
+
+// LiveKit Google plugin uses GOOGLE_API_KEY or GEMINI_API_KEY
+if (!process.env.GOOGLE_API_KEY && process.env.GEMINI_API_KEY) {
+  process.env.GOOGLE_API_KEY = process.env.GEMINI_API_KEY;
+}
+
+import { defineAgent, WorkerOptions, cli, type JobContext, voice } from "@livekit/agents";
 import * as google from "@livekit/agents-plugin-google";
+import { fileURLToPath } from "node:url";
 
 const SOLAR_SCRIPT_INSTRUCTIONS = `You are Alex, an expert solar appointment setter conducting a professional outbound phone consultation.
 
@@ -75,3 +84,10 @@ export default defineAgent({
     console.log("✅ Solar Voice Agent is live and speaking");
   },
 });
+
+cli.runApp(new WorkerOptions({
+  agent: fileURLToPath(import.meta.url),
+  wsUrl: process.env.LIVEKIT_URL,
+  apiKey: process.env.LIVEKIT_API_KEY,
+  apiSecret: process.env.LIVEKIT_API_SECRET,
+}));
