@@ -162,7 +162,6 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
   const [summaryNote, setSummaryNote] = useState("");
   const [bestVoice, setBestVoice] = useState<SpeechSynthesisVoice | null>(null);
   const [micVolume, setMicVolume] = useState<number>(0);
-  const [customUtterance, setCustomUtterance] = useState("");
 
   const recognitionRef = useRef<any>(null);
   const historyRef = useRef<Array<{ role: "assistant" | "user"; content: string }>>([]);
@@ -623,16 +622,6 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     }
   }
 
-  function triggerCustomSpeech(text: string) {
-    if (!text.trim() || callEnded) return;
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-    }
-    isSpeakingRef.current = false;
-    sendVoiceTurn(text.trim());
-    setCustomUtterance("");
-  }
-
   const latestAssistantMessage = [...history].reverse().find(h => h.role === "assistant")?.content;
   const latestUserMessage = [...history].reverse().find(h => h.role === "user")?.content;
 
@@ -738,35 +727,6 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
             )}
           </div>
         </div>
-
-        {/* Quick Voice Chips (One-Tap Test Dialogue) */}
-        {!callEnded && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", display: "flex", justifyContent: "space-between" }}>
-              <span>💬 Live Voice or One-Tap Homeowner Responses:</span>
-              <span style={{ color: "var(--accent-emerald)" }}>⚡ Mic Continuous Open</span>
-            </div>
-            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-              {[
-                "Yes, I own the home",
-                "My electric bill is about $220",
-                "How does the SGIP program work?",
-                "I'm not interested",
-                "Friday afternoon works great",
-                "Can you send me an email?"
-              ].map((phrase, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => triggerCustomSpeech(phrase)}
-                  className="button secondary"
-                  style={{ padding: "6px 12px", fontSize: "12px", height: "32px", borderRadius: "8px" }}
-                >
-                  &ldquo;{phrase}&rdquo;
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Controls */}
         <div className="call-controls-hud">
