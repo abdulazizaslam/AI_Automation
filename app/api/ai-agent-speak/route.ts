@@ -91,10 +91,14 @@ FINANCIAL / ROI OBJECTIONS:
 23. "Friend/cousin had bad experience": "Totally understand, sir. We're not here scamming people. How about we send the engineer out, and your cousin can be there too so we can walk through everything and avoid the same issues."
 24. "Can you just send me an email?": "Yes, absolutely—what's your email, sir? Perfect. In order to send you the right information, I do need to ask you a couple quick questions first—just to make sure your home qualifies."
 
-CRITICAL CONVERSATIONAL RULES:
-- Keep every spoken sentence natural and punchy (1 to 2 sentences max, 10-25 words).
-- Never deliver giant paragraphs in one turn. Real humans speak in conversational turns.
-- Advance through the script step-by-step from Step 1 Hook -> Step 2 Reason -> Step 3 Qualify -> Step 4 Bill Swap -> Step 5 Decision Makers -> Step 6 Set Appointment -> Step 7 Lock -> Step 8 Recap.
+CRITICAL SCRIPT PROGRESSION & ANTI-REPETITION RULES:
+1. NEVER REPEAT A QUESTION THAT WAS ALREADY ASKED OR ANSWERED IN CONVERSATION HISTORY.
+2. If homeowner confirms they own the home -> Move immediately to Step 2 Reason & Step 3 Qualify (mention complaint letter / SGIP, ask monthly electric bill).
+3. If homeowner answers their electric bill amount (e.g. $150+, $200+, $250+) -> NEVER ASK THE BILL AGAIN. React with "Wow, that is really high!", deliver the Step 4 Bill Swap pitch (lower payment 20-50%, zero out of pocket), and ask Step 5: "Are there any other decision makers in the household, like a spouse?"
+4. If homeowner raises any of the 18 objections -> Respond with the EXACT objection rebuttal from above, then ask the next step's question.
+5. If homeowner mentions a day/time (morning, afternoon, Friday, Saturday, etc.) -> Offer a specific appointment with consultant David (e.g. "Great, I have Friday at 3:00 PM open, does that work?").
+6. If homeowner agrees to the appointment -> Lock & confirm (Step 7), deliver Step 8 quick recap & close, and set "appointment.booked": true, "call_completed": true.
+7. Keep each spoken utterance under 25 words (1-2 sentences maximum). Speak naturally like a friendly phone consultant.
 `;
 
 export async function POST(request: Request) {
@@ -141,26 +145,42 @@ export async function POST(request: Request) {
   "summary": string
 }`;
 
-        const modelName = process.env.GEMINI_MODEL || "gemini-2.0-flash";
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiKey}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: promptText }] }],
-            generationConfig: {
-              responseMimeType: "application/json",
-              temperature: 0.25,
-              maxOutputTokens: 400
-            }
-          })
-        });
+        const candidateModels = [
+          process.env.GEMINI_MODEL || "gemini-2.5-flash",
+          "gemini-2.5-flash",
+          "gemini-flash-latest",
+          "gemini-2.5-pro"
+        ];
 
-        if (res.ok) {
-          const data = await res.json();
-          const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            return NextResponse.json(parsed);
+        for (const model of candidateModels) {
+          try {
+            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: promptText }] }],
+                generationConfig: {
+                  responseMimeType: "application/json",
+                  temperature: 0.35,
+                  maxOutputTokens: 1200
+                }
+              })
+            });
+
+            if (res.ok) {
+              const data = await res.json();
+              const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (raw) {
+                // Strip markdown backticks if any
+                const cleaned = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+                const parsed = JSON.parse(cleaned);
+                if (parsed && parsed.agent_message) {
+                  return NextResponse.json(parsed);
+                }
+              }
+            }
+          } catch (modelErr) {
+            console.warn(`Model ${model} try notice:`, modelErr);
           }
         }
       } catch (e) {
