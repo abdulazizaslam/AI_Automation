@@ -4,7 +4,6 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Lead } from "@/lib/types";
-import { GeminiLiveClient } from "@/lib/gemini-live-client";
 
 export interface CallSession {
   call_id: string;
@@ -152,6 +151,11 @@ export function ResetDatabaseButton() {
   );
 }
 
+// ═══════════════════════════════════════════════════════
+//  REALTIME VOICE CALL MODAL — Simple Sequential Flow
+//  Agent speaks → User listens → User speaks → Agent responds
+// ═══════════════════════════════════════════════════════
+
 function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; onClose: () => void }) {
   const { lead, call_id } = session;
   const [history, setHistory] = useState<Array<{ role: "assistant" | "user"; content: string }>>([]);
@@ -161,111 +165,28 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
   const [callDuration, setCallDuration] = useState(0);
   const [callEnded, setCallEnded] = useState(false);
   const [summaryNote, setSummaryNote] = useState("");
-  const [bestVoice, setBestVoice] = useState<SpeechSynthesisVoice | null>(null);
-  const [micVolume, setMicVolume] = useState<number>(0);
-  const [isGeminiLiveStreaming, setIsGeminiLiveStreaming] = useState<boolean>(false);
+  const [micVolume, setMicVolume] = useState(0);
 
-  const recognitionRef = useRef<any>(null);
-  const geminiLiveRef = useRef<GeminiLiveClient | null>(null);
   const historyRef = useRef<Array<{ role: "assistant" | "user"; content: string }>>([]);
-  const isSpeakingRef = useRef<boolean>(false);
-  const isMutedRef = useRef<boolean>(false);
-  const callEndedRef = useRef<boolean>(false);
+  const callEndedRef = useRef(false);
+  const isMutedRef = useRef(false);
+  const recognitionRef = useRef<any>(null);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const lastSpokenTextRef = useRef<string>("");
-  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
-  // Sync state refs
-  useEffect(() => {
-    historyRef.current = history;
-  }, [history]);
-
-  useEffect(() => {
-    isMutedRef.current = isMuted;
-  }, [isMuted]);
-
-  useEffect(() => {
-    callEndedRef.current = callEnded;
-  }, [callEnded]);
-
-  // Helper to compile recorded audio blob to Base64 data URL
-  const getAudioRecordingUrl = useCallback(async (): Promise<string> => {
-    try {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-        mediaRecorderRef.current.stop();
-      }
-      await new Promise(r => setTimeout(r, 200));
-
-      if (recordedChunksRef.current.length > 0) {
-        const audioBlob = new Blob(recordedChunksRef.current, { type: "audio/webm" });
-        if (audioBlob.size > 500) {
-          return new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              resolve(reader.result as string);
-            };
-            reader.readAsDataURL(audioBlob);
-          });
-        }
-      }
-    } catch (err) {
-      console.warn("Could not encode audio recording:", err);
-    }
-    return "https://actions.google.com/sounds/v1/ambiences/office_voices.ogg";
-  }, []);
-
-  // Natural Human Voice Selector
-  useEffect(() => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-
-    function selectNaturalVoice() {
-      const voices = window.speechSynthesis.getVoices();
-      if (!voices.length) return;
-
-      const priorityNames = [
-        "Microsoft Jenny Online (Natural)",
-        "Microsoft Guy Online (Natural)",
-        "Microsoft Aria Online (Natural)",
-        "Microsoft Christopher Online (Natural)",
-        "Google US English",
-        "Samantha (Enhanced)",
-        "Daniel (Enhanced)",
-        "Ava (Premium)",
-        "Natural",
-        "Neural"
-      ];
-
-      for (const name of priorityNames) {
-        const found = voices.find(v => v.name.includes(name) && v.lang.startsWith("en"));
-        if (found) {
-          setBestVoice(found);
-          return;
-        }
-      }
-
-      const enVoice = voices.find(v => v.lang === "en-US" && !v.name.toLowerCase().includes("david")) ||
-                      voices.find(v => v.lang.startsWith("en"));
-      if (enVoice) {
-        setBestVoice(enVoice);
-      }
-    }
-
-    selectNaturalVoice();
-    window.speechSynthesis.onvoiceschanged = selectNaturalVoice;
-  }, []);
+  // Sync refs
+  useEffect(() => { historyRef.current = history; }, [history]);
+  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  useEffect(() => { callEndedRef.current = callEnded; }, [callEnded]);
 
   // Call timer
   useEffect(() => {
     if (callEnded) return;
-    const interval = setInterval(() => {
-      setCallDuration(prev => prev + 1);
-    }, 1000);
+    const interval = setInterval(() => setCallDuration(prev => prev + 1), 1000);
     return () => clearInterval(interval);
   }, [callEnded]);
 
@@ -275,87 +196,160 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     return `${m}:${s}`;
   };
 
-  const stopListening = useCallback(() => {
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-    if (recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch (e) {}
-      recognitionRef.current = null;
-    }
-  }, []);
-
-  // Natural Voice Speech Output
-  const speakVoice = useCallback((text: string, isClosingTurn: boolean = false) => {
-    if (callEndedRef.current) return;
-
-    // Stop recognition while agent is speaking to prevent echo pickup
-    stopListening();
-
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+  // ─── SPEAK: Agent speaks text using browser TTS (returns a Promise) ───
+  const speakText = useCallback((text: string): Promise<void> => {
+    return new Promise((resolve) => {
+      if (callEndedRef.current || typeof window === "undefined" || !("speechSynthesis" in window)) {
+        resolve();
+        return;
+      }
       window.speechSynthesis.cancel();
 
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.04;
-      utterance.pitch = 1.0;
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.rate = 1.05;
+      utt.pitch = 1.0;
+      utt.lang = "en-US";
 
-      if (bestVoice) {
-        utterance.voice = bestVoice;
+      // Pick the best available English voice
+      const voices = window.speechSynthesis.getVoices();
+      const preferred = ["Microsoft Jenny Online", "Microsoft Guy Online", "Google US English", "Samantha", "Daniel"];
+      for (const name of preferred) {
+        const v = voices.find(v => v.name.includes(name) && v.lang.startsWith("en"));
+        if (v) { utt.voice = v; break; }
+      }
+      if (!utt.voice) {
+        const en = voices.find(v => v.lang === "en-US") || voices.find(v => v.lang.startsWith("en"));
+        if (en) utt.voice = en;
       }
 
-      utterance.onstart = () => {
-        isSpeakingRef.current = true;
-        setStatus("speaking");
-      };
+      utt.onend = () => resolve();
+      utt.onerror = () => resolve();
+      window.speechSynthesis.speak(utt);
+    });
+  }, []);
 
-      utterance.onend = () => {
-        isSpeakingRef.current = false;
-        if (isClosingTurn || callEndedRef.current) {
-          setStatus("ended");
-          stopListening();
-        } else {
-          // CRITICAL: restart speech recognition after agent finishes speaking
-          setStatus("listening");
-          startListening();
+  // ─── LISTEN: Wait for user speech via SpeechRecognition (returns a Promise<string>) ───
+  const listenOnce = useCallback((): Promise<string> => {
+    return new Promise((resolve) => {
+      if (callEndedRef.current || isMutedRef.current || typeof window === "undefined") {
+        resolve("");
+        return;
+      }
+
+      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (!SR) {
+        resolve("");
+        return;
+      }
+
+      // Clean up any previous instance
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (e) {}
+        recognitionRef.current = null;
+      }
+
+      let resolved = false;
+      const safeResolve = (val: string) => {
+        if (!resolved) {
+          resolved = true;
+          resolve(val);
         }
       };
 
-      utterance.onerror = () => {
-        isSpeakingRef.current = false;
-        if (isClosingTurn || callEndedRef.current) {
-          setStatus("ended");
-          stopListening();
-        } else {
-          setStatus("listening");
-          startListening();
+      const recognition = new SR();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+      recognitionRef.current = recognition;
+
+      let accumulated = "";
+
+      recognition.onresult = (event: any) => {
+        if (callEndedRef.current || isMutedRef.current) return;
+
+        let interim = "";
+        let finalPart = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            finalPart += event.results[i][0].transcript;
+          } else {
+            interim += event.results[i][0].transcript;
+          }
+        }
+
+        if (finalPart) accumulated += " " + finalPart;
+        const display = (accumulated + " " + interim).trim();
+        setLiveTranscript(display);
+
+        // Reset silence timer — resolve after 1.5s of silence
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = setTimeout(() => {
+          const result = display.trim();
+          try { recognition.stop(); } catch (e) {}
+          recognitionRef.current = null;
+          safeResolve(result);
+        }, 1500);
+      };
+
+      recognition.onerror = (e: any) => {
+        if (e.error === "no-speech") {
+          // No speech detected — restart after a brief delay
+          try { recognition.stop(); } catch (e) {}
+          recognitionRef.current = null;
+          if (!callEndedRef.current && !isMutedRef.current) {
+            setTimeout(() => {
+              if (!callEndedRef.current && !isMutedRef.current) {
+                listenOnce().then(safeResolve);
+              } else {
+                safeResolve("");
+              }
+            }, 300);
+          } else {
+            safeResolve("");
+          }
+          return;
+        }
+        if (e.error !== "aborted") {
+          console.warn("SpeechRecognition error:", e.error);
+        }
+        safeResolve(accumulated.trim());
+      };
+
+      recognition.onend = () => {
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+        }
+        // If not yet resolved and we have text, resolve it
+        if (!resolved && accumulated.trim()) {
+          safeResolve(accumulated.trim());
         }
       };
 
-      window.speechSynthesis.speak(utterance);
-    } else {
-      isSpeakingRef.current = false;
-      if (isClosingTurn || callEndedRef.current) {
-        setStatus("ended");
-        stopListening();
-      } else {
-        setStatus("listening");
-        startListening();
+      try {
+        recognition.start();
+      } catch (e) {
+        console.warn("Could not start recognition:", e);
+        safeResolve("");
       }
-    }
-  }, [bestVoice, stopListening, startListening]);
+    });
+  }, []);
 
-  // Send turn to backend
-  const sendVoiceTurn = useCallback(async (userUtterance?: string) => {
+  // ─── CONVERSATION LOOP: Agent speaks → User speaks → repeat ───
+  const runConversationLoop = useCallback(async (userText?: string) => {
     if (callEndedRef.current) return;
-    setStatus("processing");
 
-    let updatedHistory = [...historyRef.current];
-    if (userUtterance) {
-      updatedHistory.push({ role: "user", content: userUtterance });
-      setHistory(updatedHistory);
-      historyRef.current = updatedHistory;
+    // 1. Add user message to history (if any)
+    let currentHistory = [...historyRef.current];
+    if (userText) {
+      currentHistory.push({ role: "user", content: userText });
+      setHistory(currentHistory);
+      historyRef.current = currentHistory;
     }
+
+    // 2. Get agent response from API
+    setStatus("processing");
+    setLiveTranscript("");
 
     try {
       const res = await fetch("/api/ai-agent-speak", {
@@ -363,8 +357,8 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           lead,
-          conversationHistory: updatedHistory,
-          userUtterance: userUtterance || ""
+          conversationHistory: currentHistory,
+          userUtterance: userText || ""
         })
       });
 
@@ -372,18 +366,23 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
       const agentMsg = data.agent_message || "Thank you for your time!";
       const isClosing = Boolean(data.call_completed || data.appointment?.booked);
 
-      const newHistory = [...updatedHistory, { role: "assistant" as const, content: agentMsg }];
+      // Add agent reply to history
+      const newHistory = [...currentHistory, { role: "assistant" as const, content: agentMsg }];
       setHistory(newHistory);
       historyRef.current = newHistory;
 
-      if (isClosing) {
+      // 3. Agent speaks the response
+      setStatus("speaking");
+      await speakText(agentMsg);
+
+      // 4. If call is done, save and exit
+      if (isClosing || callEndedRef.current) {
         setCallEnded(true);
         callEndedRef.current = true;
-        setSummaryNote(data.summary || "Call completed & appointment booked");
-        stopListening();
+        setStatus("ended");
+        setSummaryNote(data.summary || "Call completed");
 
-        const finalRecordingUrl = await getAudioRecordingUrl();
-
+        const recordingUrl = await getRecordingUrl();
         await fetch("/api/voice-completion", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -391,7 +390,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
             call_id,
             call_status: "completed",
             call_outcome: data.appointment?.booked ? "Appointment Booked" : "Completed",
-            recording_url: finalRecordingUrl,
+            recording_url: recordingUrl,
             transcript: newHistory.map(h => `${h.role === "assistant" ? "Alex (AI Agent)" : lead.first_name}: ${h.content}`).join("\n"),
             summary: data.summary,
             appointment_booked: Boolean(data.appointment?.booked),
@@ -399,213 +398,152 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
             appointment: data.appointment
           })
         });
+        return;
       }
 
-      speakVoice(agentMsg, isClosing);
+      // 5. Listen for user's reply
+      if (!callEndedRef.current && !isMutedRef.current) {
+        setStatus("listening");
+        const userReply = await listenOnce();
+
+        if (userReply && !callEndedRef.current) {
+          // Got speech — do another conversation turn
+          await runConversationLoop(userReply);
+        } else if (!callEndedRef.current && !isMutedRef.current) {
+          // No speech — try listening again
+          setStatus("listening");
+          const retry = await listenOnce();
+          if (retry && !callEndedRef.current) {
+            await runConversationLoop(retry);
+          }
+        }
+      }
     } catch (err) {
-      console.error("Call turn error:", err);
+      console.error("Conversation loop error:", err);
       if (!callEndedRef.current) {
         setStatus("listening");
       }
     }
-  }, [lead, call_id, speakVoice, stopListening, getAudioRecordingUrl]);
+  }, [lead, call_id, speakText, listenOnce]);
 
-  // Speech Recognition
-  const startListening = useCallback(() => {
-    if (callEndedRef.current || isMutedRef.current) return;
-    if (typeof window === "undefined") return;
-
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
-
+  // Get audio recording as data URL
+  const getRecordingUrl = useCallback(async (): Promise<string> => {
     try {
-      if (recognitionRef.current) {
-        try { recognitionRef.current.abort(); } catch (e) {}
-        recognitionRef.current = null;
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
       }
-
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = "en-US";
-
-      recognition.onstart = () => {
-        if (!isSpeakingRef.current && !callEndedRef.current) {
-          setStatus("listening");
+      await new Promise(r => setTimeout(r, 200));
+      if (recordedChunksRef.current.length > 0) {
+        const blob = new Blob(recordedChunksRef.current, { type: "audio/webm" });
+        if (blob.size > 500) {
+          return new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(blob);
+          });
         }
-      };
+      }
+    } catch (e) {}
+    return "";
+  }, []);
 
-      recognition.onresult = (event: any) => {
-        if (isMutedRef.current || callEndedRef.current) return;
-        // Ignore any speech picked up while agent is speaking (echo)
-        if (isSpeakingRef.current) return;
+  // ─── INIT: Get microphone, start recording, kick off agent ───
+  useEffect(() => {
+    let stream: MediaStream | null = null;
 
-        let interim = "";
-        let final = "";
+    async function init() {
+      // 1. Get microphone access
+      try {
+        if (typeof window !== "undefined" && navigator.mediaDevices?.getUserMedia) {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+          });
+          mediaStreamRef.current = stream;
 
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            final += event.results[i][0].transcript;
-          } else {
-            interim += event.results[i][0].transcript;
-          }
-        }
-
-        const recognizedText = (final || interim).trim();
-
-        if (recognizedText) {
-          setLiveTranscript(recognizedText);
-          lastSpokenTextRef.current = recognizedText;
-          setStatus("listening");
-
-          // Wait for user to finish talking before sending to agent
-          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-          silenceTimerRef.current = setTimeout(() => {
-            if (lastSpokenTextRef.current && !callEndedRef.current) {
-              const textToSend = lastSpokenTextRef.current;
-              lastSpokenTextRef.current = "";
-              setLiveTranscript("");
-              sendVoiceTurn(textToSend);
-            }
-          }, 1200);
-        }
-      };
-
-      recognition.onerror = (e: any) => {
-        if (e.error !== "no-speech" && e.error !== "aborted") {
-          console.warn("Speech recognition notice:", e.error);
-        }
-        // On network or not-allowed errors, retry after delay
-        if (e.error === "network" || e.error === "service-not-available") {
-          setTimeout(() => {
-            if (!callEndedRef.current && !isMutedRef.current && !isSpeakingRef.current) {
-              startListening();
-            }
-          }, 1000);
-        }
-      };
-
-      recognition.onend = () => {
-        // Only auto-restart if call is active, not muted, and agent is not speaking
-        if (!callEndedRef.current && !isMutedRef.current && !isSpeakingRef.current) {
+          // Start recording for Supabase
           try {
-            setTimeout(() => {
-              if (!callEndedRef.current && !isMutedRef.current && !isSpeakingRef.current) {
-                recognition.start();
-              }
-            }, 100);
+            recordedChunksRef.current = [];
+            const mt = (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported("audio/webm")) ? "audio/webm" : "";
+            const recorder = mt ? new MediaRecorder(stream, { mimeType: mt }) : new MediaRecorder(stream);
+            recorder.ondataavailable = (e) => {
+              if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
+            };
+            recorder.start(400);
+            mediaRecorderRef.current = recorder;
+          } catch (e) {}
+
+          // Volume meter
+          try {
+            const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+            if (AudioCtx) {
+              const ctx = new AudioCtx();
+              audioContextRef.current = ctx;
+              const source = ctx.createMediaStreamSource(stream);
+              const analyser = ctx.createAnalyser();
+              analyser.fftSize = 64;
+              source.connect(analyser);
+              const dataArr = new Uint8Array(analyser.frequencyBinCount);
+              const pump = () => {
+                if (callEndedRef.current) return;
+                analyser.getByteFrequencyData(dataArr);
+                let sum = 0;
+                for (let i = 0; i < dataArr.length; i++) sum += dataArr[i];
+                setMicVolume(Math.min(100, Math.round((sum / dataArr.length / 128) * 100)));
+                animFrameRef.current = requestAnimationFrame(pump);
+              };
+              pump();
+            }
           } catch (e) {}
         }
-      };
+      } catch (e) {
+        console.warn("Microphone access error:", e);
+      }
 
-      recognition.start();
-      recognitionRef.current = recognition;
-    } catch (e) {
-      console.warn("Speech recognition init notice:", e);
+      // 2. Wait for TTS voices to load
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.getVoices();
+        await new Promise(r => setTimeout(r, 400));
+      }
+
+      // 3. Start the conversation — agent speaks first (no user input)
+      runConversationLoop();
     }
-  }, [sendVoiceTurn]);
 
-  // Main Call Initializer
-  useEffect(() => {
-    let activeStream: MediaStream | null = null;
-
-    if (typeof window !== "undefined" && navigator.mediaDevices?.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-      }).then((stream) => {
-        mediaStreamRef.current = stream;
-        activeStream = stream;
-
-        // Start call recorder for Supabase audio save
-        try {
-          recordedChunksRef.current = [];
-          const mimeType = (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported("audio/webm")) ? "audio/webm" : "";
-          const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-          recorder.ondataavailable = (e) => {
-            if (e.data && e.data.size > 0) {
-              recordedChunksRef.current.push(e.data);
-            }
-          };
-          recorder.start(400);
-          mediaRecorderRef.current = recorder;
-        } catch (err) {
-          console.warn("MediaRecorder start notice:", err);
-        }
-
-        // Live AudioContext Volume Analyser
-        try {
-          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-          if (AudioContextClass) {
-            const ctx = new AudioContextClass();
-            audioContextRef.current = ctx;
-            const source = ctx.createMediaStreamSource(stream);
-            const analyser = ctx.createAnalyser();
-            analyser.fftSize = 64;
-            source.connect(analyser);
-            analyserRef.current = analyser;
-
-            const dataArray = new Uint8Array(analyser.frequencyBinCount);
-            const checkVolume = () => {
-              if (callEndedRef.current) return;
-              analyser.getByteFrequencyData(dataArray);
-              let sum = 0;
-              for (let i = 0; i < dataArray.length; i++) {
-                sum += dataArray[i];
-              }
-              const avg = sum / dataArray.length;
-              setMicVolume(Math.min(100, Math.round((avg / 128) * 100)));
-              animFrameRef.current = requestAnimationFrame(checkVolume);
-            };
-            checkVolume();
-          }
-        } catch (err) {
-          console.warn("Audio analyser notice:", err);
-        }
-
-        // Agent speaks opening hook first. speakVoice() will start listening after speech ends.
-        sendVoiceTurn();
-      }).catch((err) => {
-        console.warn("Microphone access notice:", err);
-        sendVoiceTurn();
-      });
-    } else {
-      sendVoiceTurn();
-    }
+    init();
 
     return () => {
+      callEndedRef.current = true;
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       if (audioContextRef.current) audioContextRef.current.close().catch(() => {});
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
         try { mediaRecorderRef.current.stop(); } catch (e) {}
       }
-      if (activeStream) {
-        activeStream.getTracks().forEach(t => t.stop());
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (e) {}
       }
-      stopListening();
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
         window.speechSynthesis.cancel();
-      }
-      if (audioPlayerRef.current) {
-        audioPlayerRef.current.pause();
       }
     };
   }, []);
 
+  // ─── End call manually ───
   async function handleEndCallByUser() {
     setCallEnded(true);
     callEndedRef.current = true;
-    if (geminiLiveRef.current) geminiLiveRef.current.stop();
-    stopListening();
+    setStatus("ended");
 
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch (e) {}
+    }
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }
-    if (audioPlayerRef.current) {
-      audioPlayerRef.current.pause();
-    }
 
-    const finalRecordingUrl = await getAudioRecordingUrl();
-
+    const recordingUrl = await getRecordingUrl();
     fetch("/api/voice-completion", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -613,24 +551,29 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
         call_id,
         call_status: "completed",
         call_outcome: "Call Ended by User",
-        recording_url: finalRecordingUrl,
+        recording_url: recordingUrl,
         transcript: historyRef.current.map(h => `${h.role === "assistant" ? "Alex (AI Agent)" : lead.first_name}: ${h.content}`).join("\n"),
         summary: `Call ended with ${lead.first_name} ${lead.last_name}. Duration: ${formatDuration(callDuration)}.`
       })
-    }).finally(() => {
-      onClose();
-    });
+    }).finally(() => onClose());
   }
 
   function toggleMute() {
-    const nextMute = !isMuted;
-    setIsMuted(nextMute);
-    if (nextMute) {
-      stopListening();
+    const next = !isMuted;
+    setIsMuted(next);
+    isMutedRef.current = next;
+    if (next) {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (e) {}
+      }
       setStatus("processing");
     } else {
       setStatus("listening");
-      startListening();
+      listenOnce().then(text => {
+        if (text && !callEndedRef.current) {
+          runConversationLoop(text);
+        }
+      });
     }
   }
 
@@ -645,7 +588,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
           <div className="lead-title">
             <div className="call-badge-live">
               <span className="pulse-dot" />
-              <span>{callEnded ? "SESSION TERMINATED" : isGeminiLiveStreaming ? `GEMINI LIVE STREAMING · ${formatDuration(callDuration)}` : `REALTIME VOICE CALL · ${formatDuration(callDuration)}`}</span>
+              <span>{callEnded ? "SESSION TERMINATED" : `REALTIME VOICE CALL · ${formatDuration(callDuration)}`}</span>
             </div>
             <h3>{lead.first_name} {lead.last_name}</h3>
             <p>📞 {lead.phone} · 📍 {lead.property_address || lead.address}</p>
@@ -686,11 +629,11 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
           <div className="call-agent-identity">
             <h4>Alex · Solar AI Voice Consultant</h4>
             <p className="muted" style={{ margin: "4px 0 10px", fontSize: "12px" }}>
-              {isGeminiLiveStreaming ? "Engine: Google Gemini Multimodal Live API (Aoede)" : bestVoice ? `Voice: ${bestVoice.name.replace(/(Microsoft|Google|Desktop|Online \(Natural\))/g, "").trim()}` : "Gemini 2.0 Flash Fast Streaming"}
+              Engine: Gemini 2.0 Flash · Browser Speech Recognition
             </p>
           </div>
 
-          {/* Dynamic Soundwave (Reacts to live mic volume) */}
+          {/* Soundwave */}
           {!callEnded && (
             <div className={`sound-wave ${status === "speaking" ? "active-agent" : "active-user"}`} style={{ height: "36px" }}>
               {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => {
@@ -720,9 +663,9 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
               <div className="caption user-caption">
                 <strong>🎙️ {lead.first_name} (You):</strong>{" "}
                 {liveTranscript ? (
-                  <span style={{ color: "#34d399", fontWeight: 700 }}>“{liveTranscript}”</span>
+                  <span style={{ color: "#34d399", fontWeight: 700 }}>"{liveTranscript}"</span>
                 ) : latestUserMessage ? (
-                  `“${latestUserMessage}”`
+                  `"${latestUserMessage}"`
                 ) : (
                   <span style={{ color: "var(--text-muted)" }}>Speak into your microphone naturally...</span>
                 )}
