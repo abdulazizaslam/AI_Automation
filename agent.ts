@@ -76,12 +76,13 @@ export default defineAgent({
       }),
     });
 
-    await session.start({ room: ctx.room });
+    const agent = new voice.Agent();
+    await session.start({ agent, room: ctx.room });
 
     // Agent speaks first — deliver the Step 1 Opening Hook
     await session.generateReply();
 
-    console.log("✅ Solar Voice Agent is live and speaking");
+    console.log("✅ Solar Voice Agent is live and speaking in room:", ctx.room.name);
   },
 });
 
