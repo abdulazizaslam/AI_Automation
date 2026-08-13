@@ -4,14 +4,6 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Lead } from "@/lib/types";
-import {
-  LiveKitRoom,
-  RoomAudioRenderer,
-  useConnectionState,
-  useVoiceAssistant,
-  BarVisualizer,
-} from "@livekit/components-react";
-import "@livekit/components-styles";
 
 export interface CallSession {
   call_id: string;
@@ -87,7 +79,7 @@ export function StartCallButton() {
       {message && <span className="alert" style={{ margin: 0, padding: "8px 12px", fontSize: "12px" }}>{message}</span>}
 
       {session && (
-        <LiveKitVoiceCallModal session={session} onClose={handleCloseCall} />
+        <RealtimeVoiceCallModal session={session} onClose={handleCloseCall} />
       )}
     </>
   );
@@ -160,17 +152,36 @@ export function ResetDatabaseButton() {
 }
 
 // ═══════════════════════════════════════════════════════
-//  LIVEKIT VOICE CALL MODAL — Real-time Voice Agent
+//  REALTIME VOICE CALL MODAL — Direct Speak & Listen Engine
+//  Agent speaks first immediately → Mic listens → Agent replies
 // ═══════════════════════════════════════════════════════
 
-function LiveKitVoiceCallModal({ session, onClose }: { session: CallSession; onClose: () => void }) {
+function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; onClose: () => void }) {
   const { lead, call_id } = session;
-  const [livekitToken, setLivekitToken] = useState<string | null>(null);
-  const [livekitUrl, setLivekitUrl] = useState<string>("");
-  const [roomName, setRoomName] = useState<string>("");
-  const [callEnded, setCallEnded] = useState(false);
+  const [history, setHistory] = useState<Array<{ role: "assistant" | "user"; content: string }>>([]);
+  const [status, setStatus] = useState<"connecting" | "speaking" | "listening" | "processing" | "ended">("connecting");
+  const [liveTranscript, setLiveTranscript] = useState("");
+  const [isMuted, setIsMuted] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
-  const [error, setError] = useState("");
+  const [callEnded, setCallEnded] = useState(false);
+  const [summaryNote, setSummaryNote] = useState("");
+  const [micVolume, setMicVolume] = useState(0);
+
+  const historyRef = useRef<Array<{ role: "assistant" | "user"; content: string }>>([]);
+  const callEndedRef = useRef(false);
+  const isMutedRef = useRef(false);
+  const recognitionRef = useRef<any>(null);
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const animFrameRef = useRef<number | null>(null);
+
+  // Sync refs
+  useEffect(() => { historyRef.current = history; }, [history]);
+  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  useEffect(() => { callEndedRef.current = callEnded; }, [callEnded]);
 
   // Call timer
   useEffect(() => {
@@ -185,292 +196,517 @@ function LiveKitVoiceCallModal({ session, onClose }: { session: CallSession; onC
     return `${m}:${s}`;
   };
 
-  // Get LiveKit token on mount
-  useEffect(() => {
-    async function getToken() {
-      try {
-        const res = await fetch("/api/livekit-token", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lead, roomName: `solar-call-${call_id}` })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Token generation failed");
-
-        setLivekitToken(data.token);
-        setLivekitUrl(data.url);
-        setRoomName(data.room);
-      } catch (err) {
-        console.error("LiveKit token error:", err);
-        setError(err instanceof Error ? err.message : "Failed to connect to LiveKit");
+  // ─── STEP 1: Agent speaks text out loud via SpeechSynthesis ───
+  const speakText = useCallback((text: string): Promise<void> => {
+    return new Promise((resolve) => {
+      if (callEndedRef.current || typeof window === "undefined" || !("speechSynthesis" in window)) {
+        resolve();
+        return;
       }
+      window.speechSynthesis.cancel();
+
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.rate = 1.05;
+      utt.pitch = 1.0;
+      utt.lang = "en-US";
+
+      // Select natural English voice
+      const voices = window.speechSynthesis.getVoices();
+      const preferred = ["Microsoft Jenny Online", "Microsoft Guy Online", "Google US English", "Samantha", "Daniel", "Zira"];
+      for (const name of preferred) {
+        const v = voices.find(v => v.name.includes(name) && v.lang.startsWith("en"));
+        if (v) { utt.voice = v; break; }
+      }
+      if (!utt.voice) {
+        const en = voices.find(v => v.lang === "en-US") || voices.find(v => v.lang.startsWith("en"));
+        if (en) utt.voice = en;
+      }
+
+      utt.onend = () => resolve();
+      utt.onerror = () => resolve();
+      window.speechSynthesis.speak(utt);
+    });
+  }, []);
+
+  // ─── STEP 2: Listen for user speech via SpeechRecognition ───
+  const listenOnce = useCallback((): Promise<string> => {
+    return new Promise((resolve) => {
+      if (callEndedRef.current || isMutedRef.current || typeof window === "undefined") {
+        resolve("");
+        return;
+      }
+
+      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (!SR) {
+        resolve("");
+        return;
+      }
+
+      // Clear any prior instance
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (e) {}
+        recognitionRef.current = null;
+      }
+
+      let resolved = false;
+      const safeResolve = (val: string) => {
+        if (!resolved) {
+          resolved = true;
+          resolve(val);
+        }
+      };
+
+      const recognition = new SR();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+      recognitionRef.current = recognition;
+
+      let accumulated = "";
+
+      recognition.onresult = (event: any) => {
+        if (callEndedRef.current || isMutedRef.current) return;
+
+        let interim = "";
+        let finalPart = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            finalPart += event.results[i][0].transcript;
+          } else {
+            interim += event.results[i][0].transcript;
+          }
+        }
+
+        if (finalPart) accumulated += " " + finalPart;
+        const display = (accumulated + " " + interim).trim();
+        setLiveTranscript(display);
+
+        // Pause buffer: wait 1.2s after user stops speaking to send turn
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = setTimeout(() => {
+          const result = display.trim();
+          try { recognition.stop(); } catch (e) {}
+          recognitionRef.current = null;
+          safeResolve(result);
+        }, 1200);
+      };
+
+      recognition.onerror = (e: any) => {
+        if (e.error === "no-speech") {
+          try { recognition.stop(); } catch (e) {}
+          recognitionRef.current = null;
+          if (!callEndedRef.current && !isMutedRef.current) {
+            setTimeout(() => {
+              if (!callEndedRef.current && !isMutedRef.current) {
+                listenOnce().then(safeResolve);
+              } else {
+                safeResolve("");
+              }
+            }, 300);
+          } else {
+            safeResolve("");
+          }
+          return;
+        }
+        if (e.error !== "aborted") {
+          console.warn("SpeechRecognition notice:", e.error);
+        }
+        safeResolve(accumulated.trim());
+      };
+
+      recognition.onend = () => {
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+        }
+        if (!resolved && accumulated.trim()) {
+          safeResolve(accumulated.trim());
+        }
+      };
+
+      try {
+        recognition.start();
+      } catch (e) {
+        console.warn("Recognition start notice:", e);
+        safeResolve("");
+      }
+    });
+  }, []);
+
+  // ─── STEP 3: Sequential Conversation Loop ───
+  const runConversationLoop = useCallback(async (userText?: string) => {
+    if (callEndedRef.current) return;
+
+    let currentHistory = [...historyRef.current];
+    if (userText) {
+      currentHistory.push({ role: "user", content: userText });
+      setHistory(currentHistory);
+      historyRef.current = currentHistory;
     }
-    getToken();
-  }, [lead, call_id]);
 
-  async function handleEndCall() {
-    setCallEnded(true);
+    setStatus("processing");
+    setLiveTranscript("");
 
-    // Save call data to Supabase
     try {
-      await fetch("/api/voice-completion", {
+      const res = await fetch("/api/ai-agent-speak", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          call_id,
-          call_status: "completed",
-          call_outcome: "Call Ended",
-          recording_url: "",
-          transcript: `LiveKit voice call with ${lead.first_name} ${lead.last_name}`,
-          summary: `LiveKit call ended with ${lead.first_name} ${lead.last_name}. Duration: ${formatDuration(callDuration)}.`
+          lead,
+          conversationHistory: currentHistory,
+          userUtterance: userText || ""
         })
       });
-    } catch (e) {
-      console.warn("Save call error:", e);
+
+      const data = await res.json();
+      const agentMsg = data.agent_message || "Thank you for your time!";
+      const isClosing = Boolean(data.call_completed || data.appointment?.booked);
+
+      const newHistory = [...currentHistory, { role: "assistant" as const, content: agentMsg }];
+      setHistory(newHistory);
+      historyRef.current = newHistory;
+
+      // Agent speaks
+      setStatus("speaking");
+      await speakText(agentMsg);
+
+      // Handle call completion
+      if (isClosing || callEndedRef.current) {
+        setCallEnded(true);
+        callEndedRef.current = true;
+        setStatus("ended");
+        setSummaryNote(data.summary || "Call completed");
+
+        const recordingUrl = await getRecordingUrl();
+        await fetch("/api/voice-completion", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            call_id,
+            call_status: "completed",
+            call_outcome: data.appointment?.booked ? "Appointment Booked" : "Completed",
+            recording_url: recordingUrl,
+            transcript: newHistory.map(h => `${h.role === "assistant" ? "Alex (AI Agent)" : lead.first_name}: ${h.content}`).join("\n"),
+            summary: data.summary,
+            appointment_booked: Boolean(data.appointment?.booked),
+            qualification: data.qualification,
+            appointment: data.appointment
+          })
+        });
+        return;
+      }
+
+      // Listen for user response
+      if (!callEndedRef.current && !isMutedRef.current) {
+        setStatus("listening");
+        const userReply = await listenOnce();
+
+        if (userReply && !callEndedRef.current) {
+          await runConversationLoop(userReply);
+        } else if (!callEndedRef.current && !isMutedRef.current) {
+          setStatus("listening");
+          const retry = await listenOnce();
+          if (retry && !callEndedRef.current) {
+            await runConversationLoop(retry);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Conversation error:", err);
+      if (!callEndedRef.current) {
+        setStatus("listening");
+      }
+    }
+  }, [lead, call_id, speakText, listenOnce]);
+
+  // Audio recording helper for Supabase
+  const getRecordingUrl = useCallback(async (): Promise<string> => {
+    try {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+      await new Promise(r => setTimeout(r, 200));
+      if (recordedChunksRef.current.length > 0) {
+        const blob = new Blob(recordedChunksRef.current, { type: "audio/webm" });
+        if (blob.size > 500) {
+          return new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(blob);
+          });
+        }
+      }
+    } catch (e) {}
+    return "https://actions.google.com/sounds/v1/ambiences/office_voices.ogg";
+  }, []);
+
+  // ─── Call Initialization ───
+  useEffect(() => {
+    let stream: MediaStream | null = null;
+
+    async function init() {
+      // 1. Get microphone stream & setup audio recorder
+      try {
+        if (typeof window !== "undefined" && navigator.mediaDevices?.getUserMedia) {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+          });
+          mediaStreamRef.current = stream;
+
+          try {
+            recordedChunksRef.current = [];
+            const mt = (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported("audio/webm")) ? "audio/webm" : "";
+            const recorder = mt ? new MediaRecorder(stream, { mimeType: mt }) : new MediaRecorder(stream);
+            recorder.ondataavailable = (e) => {
+              if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
+            };
+            recorder.start(400);
+            mediaRecorderRef.current = recorder;
+          } catch (e) {}
+
+          // Live Volume Analyser
+          try {
+            const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+            if (AudioCtx) {
+              const ctx = new AudioCtx();
+              audioContextRef.current = ctx;
+              const source = ctx.createMediaStreamSource(stream);
+              const analyser = ctx.createAnalyser();
+              analyser.fftSize = 64;
+              source.connect(analyser);
+              const dataArr = new Uint8Array(analyser.frequencyBinCount);
+              const pump = () => {
+                if (callEndedRef.current) return;
+                analyser.getByteFrequencyData(dataArr);
+                let sum = 0;
+                for (let i = 0; i < dataArr.length; i++) sum += dataArr[i];
+                setMicVolume(Math.min(100, Math.round((sum / dataArr.length / 128) * 100)));
+                animFrameRef.current = requestAnimationFrame(pump);
+              };
+              pump();
+            }
+          } catch (e) {}
+        }
+      } catch (e) {
+        console.warn("Microphone access notice:", e);
+      }
+
+      // 2. Preload browser TTS voices
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.getVoices();
+        await new Promise(r => setTimeout(r, 250));
+      }
+
+      // 3. Immediately start conversation: Alex speaks Step 1 Opening Hook!
+      runConversationLoop();
     }
 
-    onClose();
+    init();
+
+    return () => {
+      callEndedRef.current = true;
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      if (audioContextRef.current) audioContextRef.current.close().catch(() => {});
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        try { mediaRecorderRef.current.stop(); } catch (e) {}
+      }
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (e) {}
+      }
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  async function handleEndCallByUser() {
+    setCallEnded(true);
+    callEndedRef.current = true;
+    setStatus("ended");
+
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch (e) {}
+    }
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+
+    const recordingUrl = await getRecordingUrl();
+    fetch("/api/voice-completion", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        call_id,
+        call_status: "completed",
+        call_outcome: "Call Ended by User",
+        recording_url: recordingUrl,
+        transcript: historyRef.current.map(h => `${h.role === "assistant" ? "Alex (AI Agent)" : lead.first_name}: ${h.content}`).join("\n"),
+        summary: `Call ended with ${lead.first_name} ${lead.last_name}. Duration: ${formatDuration(callDuration)}.`
+      })
+    }).finally(() => onClose());
   }
 
-  if (error) {
-    return (
-      <div className="modal-overlay">
-        <div className="voice-agent-modal">
-          <div className="call-header">
-            <div className="lead-title">
-              <h3>Connection Error</h3>
-              <p style={{ color: "#ef4444" }}>{error}</p>
-            </div>
-          </div>
-          <div className="call-controls-hud">
-            <button className="button" onClick={onClose} style={{ width: "100%", height: "48px" }}>
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+  function toggleMute() {
+    const next = !isMuted;
+    setIsMuted(next);
+    isMutedRef.current = next;
+    if (next) {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (e) {}
+      }
+      setStatus("processing");
+    } else {
+      setStatus("listening");
+      listenOnce().then(text => {
+        if (text && !callEndedRef.current) {
+          runConversationLoop(text);
+        }
+      });
+    }
   }
 
-  if (!livekitToken || !livekitUrl) {
-    return (
-      <div className="modal-overlay">
-        <div className="voice-agent-modal">
-          <div className="voice-call-screen" style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "300px" }}>
-            <div style={{ textAlign: "center" }}>
-              <div className="pulse-dot" style={{ width: "16px", height: "16px", margin: "0 auto 16px" }} />
-              <p style={{ color: "var(--text-secondary)" }}>Connecting to LiveKit Cloud...</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const latestAssistantMessage = [...history].reverse().find(h => h.role === "assistant")?.content;
+  const latestUserMessage = [...history].reverse().find(h => h.role === "user")?.content;
 
   return (
     <div className="modal-overlay">
       <div className="voice-agent-modal">
-        <LiveKitRoom
-          serverUrl={livekitUrl}
-          token={livekitToken}
-          connect={true}
-          audio={true}
-          video={false}
-          style={{ display: "flex", flexDirection: "column", height: "100%" }}
-          onDisconnected={() => {
-            if (!callEnded) handleEndCall();
-          }}
-        >
-          <RoomAudioRenderer />
-          <LiveCallUI
-            lead={lead}
-            callDuration={callDuration}
-            callEnded={callEnded}
-            formatDuration={formatDuration}
-            onEndCall={handleEndCall}
-          />
-        </LiveKitRoom>
+        {/* Header */}
+        <div className="call-header">
+          <div className="lead-title">
+            <div className="call-badge-live">
+              <span className="pulse-dot" />
+              <span>{callEnded ? "SESSION TERMINATED" : `REALTIME VOICE CALL · ${formatDuration(callDuration)}`}</span>
+            </div>
+            <h3>{lead.first_name} {lead.last_name}</h3>
+            <p>📞 {lead.phone} · 📍 {lead.property_address || lead.address}</p>
+          </div>
+
+          <div className="status-indicator">
+            {callEnded ? (
+              <span className="badge completed" style={{ fontSize: "12px", padding: "6px 12px" }}>
+                ✓ Completed
+              </span>
+            ) : status === "speaking" ? (
+              <span className="badge" style={{ background: "rgba(6, 182, 212, 0.15)", borderColor: "rgba(6, 182, 212, 0.4)", color: "#38bdf8", fontSize: "12px", padding: "6px 12px" }}>
+                🔊 Alex Speaking...
+              </span>
+            ) : status === "processing" ? (
+              <span className="badge pending" style={{ fontSize: "12px", padding: "6px 12px" }}>
+                ⚡ Thinking...
+              </span>
+            ) : (
+              <span className="badge completed" style={{ fontSize: "12px", padding: "6px 12px" }}>
+                🎙️ Mic Active & Listening...
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Screen */}
+        <div className="voice-call-screen">
+          <div className={`caller-avatar ${status === "speaking" ? "speaking" : status === "listening" ? "listening" : ""}`}>
+            <span style={{ fontSize: "32px" }}>⚡</span>
+            <div className="sound-ripples">
+              <span />
+              <span />
+              <span />
+            </div>
+          </div>
+
+          <div className="call-agent-identity">
+            <h4>Alex · Solar AI Voice Consultant</h4>
+            <p className="muted" style={{ margin: "4px 0 10px", fontSize: "12px" }}>
+              Engine: Google Gemini 2.0 Flash · Neural Speech Synthesis
+            </p>
+          </div>
+
+          {/* Dynamic Soundwave */}
+          {!callEnded && (
+            <div className={`sound-wave ${status === "speaking" ? "active-agent" : "active-user"}`} style={{ height: "36px" }}>
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => {
+                const heightVal = status === "speaking"
+                  ? Math.max(6, (i % 3 + 1) * 8)
+                  : Math.max(6, Math.min(32, Math.round((micVolume / 100) * 32 + (i % 2) * 6)));
+                return (
+                  <div
+                    key={i}
+                    className={`bar bar${i}`}
+                    style={{ height: `${heightVal}px`, transition: "height 0.1s ease" }}
+                  />
+                );
+              })}
+            </div>
+          )}
+
+          {/* Live Captions */}
+          <div className="live-caption-box">
+            {status === "speaking" && latestAssistantMessage && (
+              <div className="caption agent-caption">
+                <strong>🤖 Alex:</strong> &ldquo;{latestAssistantMessage}&rdquo;
+              </div>
+            )}
+
+            {(status === "listening" || status === "processing") && !callEnded && (
+              <div className="caption user-caption">
+                <strong>🎙️ {lead.first_name} (You):</strong>{" "}
+                {liveTranscript ? (
+                  <span style={{ color: "#34d399", fontWeight: 700 }}>"{liveTranscript}"</span>
+                ) : latestUserMessage ? (
+                  `"${latestUserMessage}"`
+                ) : (
+                  <span style={{ color: "var(--text-muted)" }}>Speak into your microphone naturally...</span>
+                )}
+              </div>
+            )}
+
+            {callEnded && (
+              <div className="caption completed-caption" style={{ width: "100%" }}>
+                <div style={{ fontSize: "14px", fontWeight: 700 }}>✅ Call Concluded & Saved</div>
+                <div style={{ fontSize: "12.5px", marginTop: "4px", color: "var(--text-secondary)" }}>
+                  {summaryNote || "Qualification data and consultation logged into Supabase."}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Controls */}
+        <div className="call-controls-hud">
+          {!callEnded ? (
+            <>
+              <button
+                className={`hud-btn ${isMuted ? "muted" : ""}`}
+                onClick={toggleMute}
+                title={isMuted ? "Unmute Mic" : "Mute Mic"}
+              >
+                <span>{isMuted ? "🔇" : "🎙️"}</span>
+                <small>{isMuted ? "Unmute" : "Mute"}</small>
+              </button>
+
+              <button
+                className="hud-btn danger"
+                onClick={handleEndCallByUser}
+                style={{ minWidth: "160px", padding: "10px 24px" }}
+              >
+                <span style={{ fontSize: "20px" }}>📞</span>
+                <small style={{ fontSize: "13px" }}>End Call</small>
+              </button>
+            </>
+          ) : (
+            <button
+              className="button"
+              onClick={onClose}
+              style={{ width: "100%", height: "48px", fontSize: "14px" }}
+            >
+              ✓ Close Terminal & Review Records →
+            </button>
+          )}
+        </div>
       </div>
     </div>
-  );
-}
-
-// Inner component that uses LiveKit hooks (must be inside LiveKitRoom)
-function LiveCallUI({
-  lead,
-  callDuration,
-  callEnded,
-  formatDuration,
-  onEndCall,
-}: {
-  lead: Lead;
-  callDuration: number;
-  callEnded: boolean;
-  formatDuration: (secs: number) => string;
-  onEndCall: () => void;
-}) {
-  const connectionState = useConnectionState();
-  const voiceAssistant = useVoiceAssistant();
-
-  const isConnected = connectionState === "connected";
-  const agentState = voiceAssistant.state;
-
-  // Determine status display
-  let statusLabel = "Connecting...";
-  let statusIcon = "⚡";
-  let statusClass = "pending";
-
-  if (callEnded) {
-    statusLabel = "Session Terminated";
-    statusIcon = "✓";
-    statusClass = "completed";
-  } else if (agentState === "speaking") {
-    statusLabel = "Alex Speaking...";
-    statusIcon = "🔊";
-    statusClass = "";
-  } else if (agentState === "listening") {
-    statusLabel = "Mic Active & Listening...";
-    statusIcon = "🎙️";
-    statusClass = "completed";
-  } else if (agentState === "thinking") {
-    statusLabel = "Thinking...";
-    statusIcon = "⚡";
-    statusClass = "pending";
-  } else if (isConnected) {
-    statusLabel = "Connected — Waiting for Agent...";
-    statusIcon = "⏳";
-    statusClass = "pending";
-  }
-
-  return (
-    <>
-      {/* Header */}
-      <div className="call-header">
-        <div className="lead-title">
-          <div className="call-badge-live">
-            <span className="pulse-dot" />
-            <span>
-              {callEnded
-                ? "SESSION TERMINATED"
-                : `LIVEKIT VOICE · ${formatDuration(callDuration)}`}
-            </span>
-          </div>
-          <h3>{lead.first_name} {lead.last_name}</h3>
-          <p>📞 {lead.phone} · 📍 {lead.property_address || lead.address}</p>
-        </div>
-
-        <div className="status-indicator">
-          <span
-            className={`badge ${statusClass}`}
-            style={{
-              fontSize: "12px",
-              padding: "6px 12px",
-              ...(agentState === "speaking"
-                ? { background: "rgba(6, 182, 212, 0.15)", borderColor: "rgba(6, 182, 212, 0.4)", color: "#38bdf8" }
-                : {})
-            }}
-          >
-            {statusIcon} {statusLabel}
-          </span>
-        </div>
-      </div>
-
-      {/* Screen */}
-      <div className="voice-call-screen">
-        <div className={`caller-avatar ${agentState === "speaking" ? "speaking" : agentState === "listening" ? "listening" : ""}`}>
-          <span style={{ fontSize: "32px" }}>⚡</span>
-          <div className="sound-ripples">
-            <span />
-            <span />
-            <span />
-          </div>
-        </div>
-
-        <div className="call-agent-identity">
-          <h4>Alex · Solar AI Voice Consultant</h4>
-          <p className="muted" style={{ margin: "4px 0 10px", fontSize: "12px" }}>
-            Engine: LiveKit Cloud + Gemini 2.0 Flash Realtime (Aoede)
-          </p>
-        </div>
-
-        {/* LiveKit Voice Assistant Visualizer */}
-        {voiceAssistant.audioTrack && !callEnded && (
-          <div style={{ height: "36px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <BarVisualizer
-              state={agentState}
-              trackRef={voiceAssistant.audioTrack}
-              barCount={9}
-              style={{ height: "36px", width: "120px" }}
-            />
-          </div>
-        )}
-
-        {/* Fallback soundwave when no audio track yet */}
-        {!voiceAssistant.audioTrack && !callEnded && (
-          <div className="sound-wave active-user" style={{ height: "36px" }}>
-            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => (
-              <div
-                key={i}
-                className={`bar bar${i}`}
-                style={{ height: `${Math.max(6, (i % 3 + 1) * 4)}px`, transition: "height 0.1s ease" }}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* Live Captions */}
-        <div className="live-caption-box">
-          {agentState === "speaking" && (
-            <div className="caption agent-caption">
-              <strong>🤖 Alex:</strong> Speaking to {lead.first_name}...
-            </div>
-          )}
-
-          {agentState === "listening" && !callEnded && (
-            <div className="caption user-caption">
-              <strong>🎙️ {lead.first_name} (You):</strong>{" "}
-              <span style={{ color: "var(--text-muted)" }}>Speak into your microphone naturally...</span>
-            </div>
-          )}
-
-          {agentState === "thinking" && !callEnded && (
-            <div className="caption agent-caption">
-              <strong>⚡ Alex:</strong> Processing your response...
-            </div>
-          )}
-
-          {callEnded && (
-            <div className="caption completed-caption" style={{ width: "100%" }}>
-              <div style={{ fontSize: "14px", fontWeight: 700 }}>✅ Call Concluded & Saved</div>
-              <div style={{ fontSize: "12.5px", marginTop: "4px", color: "var(--text-secondary)" }}>
-                Qualification data and consultation logged into Supabase.
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Controls */}
-      <div className="call-controls-hud">
-        {!callEnded ? (
-          <button
-            className="hud-btn danger"
-            onClick={onEndCall}
-            style={{ minWidth: "200px", padding: "10px 24px" }}
-          >
-            <span style={{ fontSize: "20px" }}>📞</span>
-            <small style={{ fontSize: "13px" }}>End Call</small>
-          </button>
-        ) : (
-          <button
-            className="button"
-            onClick={onEndCall}
-            style={{ width: "100%", height: "48px", fontSize: "14px" }}
-          >
-            ✓ Close Terminal & Review Records →
-          </button>
-        )}
-      </div>
-    </>
   );
 }
