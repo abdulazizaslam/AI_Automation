@@ -38,19 +38,22 @@ export default async function LeadDetail({ params }: { params: Promise<{ id: str
   return (
     <div suppressHydrationWarning>
       <DashboardAutoRefresher />
+
       <div className="hero" suppressHydrationWarning>
         <div suppressHydrationWarning>
-          <Link href="/leads" style={{ textDecoration: "none", color: "#246b48", fontWeight: 700, fontSize: "14px" }}>
-            ← Back to Leads
+          <Link href="/leads" style={{ textDecoration: "none", color: "var(--accent-emerald)", fontWeight: 700, fontSize: "13px" }}>
+            ← Back to All Leads
           </Link>
           <h1 style={{ marginTop: "8px" }} suppressHydrationWarning>
             {lead.first_name} {lead.last_name}
           </h1>
-          <p className="muted" suppressHydrationWarning>
-            📞 {lead.phone} · ✉️ {lead.email || "No email"} · 📍 {lead.property_address || lead.address || "No address"}
+          <p className="muted" style={{ display: "flex", gap: "12px", flexWrap: "wrap" }} suppressHydrationWarning>
+            <span>📞 {lead.phone}</span>
+            <span>✉️ {lead.email || "No email"}</span>
+            <span>📍 {lead.property_address || lead.address || "No address"}</span>
           </p>
         </div>
-        <Link className="button secondary" href="/">
+        <Link className="button secondary" href="/" style={{ height: "44px" }}>
           Dashboard
         </Link>
       </div>
@@ -58,71 +61,102 @@ export default async function LeadDetail({ params }: { params: Promise<{ id: str
       <div className="detail" suppressHydrationWarning>
         {/* Qualification Section */}
         <div className="card" suppressHydrationWarning>
-          <h2 suppressHydrationWarning>Qualification Details</h2>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+            <h2 style={{ margin: 0 }} suppressHydrationWarning>⚡ Solar Qualification Metrics</h2>
+            <span className={`badge ${qualification?.qualification_status === "Qualified" ? "completed" : "pending"}`}>
+              {field(qualification?.qualification_status || "Pending")}
+            </span>
+          </div>
+
           <div className="kvs" suppressHydrationWarning>
             <div className="kv" suppressHydrationWarning>
-              <small suppressHydrationWarning>Status</small>
-              <strong suppressHydrationWarning>
-                <span className={`badge ${qualification?.qualification_status === "Qualified" ? "completed" : "pending"}`}>
-                  {field(qualification?.qualification_status || "Pending")}
-                </span>
+              <small suppressHydrationWarning>Avg Electric Bill</small>
+              <strong suppressHydrationWarning style={{ color: "var(--accent-emerald)" }}>
+                {qualification?.average_electric_bill ? `$${qualification.average_electric_bill}/mo` : "—"}
               </strong>
             </div>
+
             <div className="kv" suppressHydrationWarning>
-              <small suppressHydrationWarning>Avg Electric Bill</small>
-              <strong suppressHydrationWarning>{qualification?.average_electric_bill ? `$${qualification.average_electric_bill}/mo` : "—"}</strong>
+              <small suppressHydrationWarning>Homeowner Confirmed</small>
+              <strong suppressHydrationWarning>
+                {qualification?.homeowner_confirmed ? "Yes (Owner)" : qualification?.homeowner_confirmed === false ? "No (Renter)" : "—"}
+              </strong>
             </div>
+
             <div className="kv" suppressHydrationWarning>
-              <small suppressHydrationWarning>Homeowner</small>
-              <strong suppressHydrationWarning>{qualification?.homeowner_confirmed ? "Yes" : qualification?.homeowner_confirmed === false ? "No" : "—"}</strong>
-            </div>
-            <div className="kv" suppressHydrationWarning>
-              <small suppressHydrationWarning>Home Type</small>
+              <small suppressHydrationWarning>Home Structure</small>
               <strong suppressHydrationWarning>{field(qualification?.home_type)}</strong>
             </div>
+
             <div className="kv" suppressHydrationWarning>
-              <small suppressHydrationWarning>Electricity Provider</small>
+              <small suppressHydrationWarning>Utility Provider</small>
               <strong suppressHydrationWarning>{field(qualification?.electricity_provider)}</strong>
             </div>
+
             <div className="kv" suppressHydrationWarning>
-              <small suppressHydrationWarning>Credit &gt; 650</small>
-              <strong suppressHydrationWarning>{qualification?.credit_above_650 ? "Yes" : qualification?.credit_above_650 === false ? "No" : "—"}</strong>
+              <small suppressHydrationWarning>Credit Score &gt; 650</small>
+              <strong suppressHydrationWarning>
+                {qualification?.credit_above_650 ? "Yes" : qualification?.credit_above_650 === false ? "No" : "—"}
+              </strong>
             </div>
+
             <div className="kv" suppressHydrationWarning>
               <small suppressHydrationWarning>Roof Shading</small>
               <strong suppressHydrationWarning>{field(qualification?.roof_shading)}</strong>
             </div>
+
             <div className="kv" suppressHydrationWarning>
               <small suppressHydrationWarning>Decision Maker</small>
-              <strong suppressHydrationWarning>{qualification?.decision_maker ? "Yes" : qualification?.decision_maker === false ? "No" : "—"}</strong>
+              <strong suppressHydrationWarning>
+                {qualification?.decision_maker ? "Yes" : qualification?.decision_maker === false ? "No" : "—"}
+              </strong>
+            </div>
+
+            <div className="kv" suppressHydrationWarning>
+              <small suppressHydrationWarning>Database Status</small>
+              <strong suppressHydrationWarning>{field(lead.lead_status || "new")}</strong>
             </div>
           </div>
+
           {qualification?.notes && (
-            <div style={{ marginTop: "16px", paddingTop: "14px", borderTop: "1px solid #e8eee9" }} suppressHydrationWarning>
-              <small className="muted" suppressHydrationWarning>Qualification Notes:</small>
-              <p style={{ margin: "4px 0 0", fontSize: "14px" }} suppressHydrationWarning>{qualification.notes}</p>
+            <div style={{ marginTop: "18px", paddingTop: "14px", borderTop: "1px solid var(--border-subtle)" }} suppressHydrationWarning>
+              <small className="muted" style={{ textTransform: "uppercase", fontSize: "11px", letterSpacing: "0.06em" }} suppressHydrationWarning>
+                Auditor & Qualification Notes:
+              </small>
+              <p style={{ margin: "6px 0 0", fontSize: "13.5px", color: "var(--text-secondary)" }} suppressHydrationWarning>
+                {qualification.notes}
+              </p>
             </div>
           )}
         </div>
 
         {/* Latest Call Section */}
         <div className="card" suppressHydrationWarning>
-          <h2 suppressHydrationWarning>Latest Call Details</h2>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+            <h2 style={{ margin: 0 }} suppressHydrationWarning>🎙 Latest Voice Call Activity</h2>
+            {latestCall && (
+              <span className={`badge ${latestCall.call_status === "completed" ? "completed" : "pending"}`}>
+                {latestCall.call_status}
+              </span>
+            )}
+          </div>
+
           {latestCall ? (
             <>
               <div style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "14px" }} suppressHydrationWarning>
-                <span className={`badge ${latestCall.call_status === "completed" ? "completed" : "pending"}`}>
-                  {latestCall.call_status}
-                </span>
-                <strong style={{ fontSize: "15px" }} suppressHydrationWarning>{latestCall.call_outcome || "Outcome N/A"}</strong>
-                <span className="muted" style={{ marginLeft: "auto", fontSize: "12px" }} suppressHydrationWarning>
+                <strong style={{ fontSize: "15px", color: "#fff" }} suppressHydrationWarning>
+                  {latestCall.call_outcome || "Outcome N/A"}
+                </strong>
+                <span className="muted" style={{ marginLeft: "auto", fontSize: "12px", fontFamily: "'JetBrains Mono', monospace" }} suppressHydrationWarning>
                   {new Date(latestCall.created_at).toLocaleString()}
                 </span>
               </div>
 
               {latestCall.summary && (
                 <div style={{ marginBottom: "16px" }} suppressHydrationWarning>
-                  <h3 style={{ fontSize: "14px", margin: "0 0 6px", color: "#163b2a" }} suppressHydrationWarning>🤖 AI Call Summary</h3>
+                  <h3 style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.06em", margin: "0 0 6px", color: "var(--accent-emerald)" }} suppressHydrationWarning>
+                    🤖 AI Synthesis Summary
+                  </h3>
                   <div className="alert success" style={{ margin: 0 }} suppressHydrationWarning>
                     {latestCall.summary}
                   </div>
@@ -130,36 +164,38 @@ export default async function LeadDetail({ params }: { params: Promise<{ id: str
               )}
 
               {latestCall.recording_url ? (
-                <div style={{ marginBottom: "18px", background: "#f5f9f6", border: "1px solid #dbe6dd", borderRadius: "14px", padding: "16px" }} suppressHydrationWarning>
+                <div style={{ marginBottom: "18px", background: "rgba(15, 23, 42, 0.9)", border: "1px solid var(--border-subtle)", borderRadius: "12px", padding: "14px" }} suppressHydrationWarning>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-                    <h3 style={{ fontSize: "14px", margin: 0, color: "#163b2a", display: "flex", alignItems: "center", gap: "6px" }} suppressHydrationWarning>
-                      <span>🔊</span> Call Audio Recording
+                    <h3 style={{ fontSize: "13px", margin: 0, color: "#fff", display: "flex", alignItems: "center", gap: "6px" }} suppressHydrationWarning>
+                      <span>🔊</span> Audio Stream Recording
                     </h3>
                     <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                      <span className="badge completed" style={{ fontSize: "11px" }}>Saved in Supabase</span>
+                      <span className="badge completed" style={{ fontSize: "10px" }}>Supabase Stored</span>
                       <a
                         href={latestCall.recording_url}
                         download={`call-recording-${lead.first_name}-${latestCall.id.slice(0, 8)}.webm`}
                         className="button secondary"
-                        style={{ padding: "4px 10px", fontSize: "11px", textDecoration: "none" }}
+                        style={{ padding: "2px 8px", fontSize: "11px", height: "26px", textDecoration: "none" }}
                       >
                         ⬇ Download
                       </a>
                     </div>
                   </div>
-                  <audio controls className="audio-player" style={{ width: "100%", outline: "none", height: "42px" }} src={latestCall.recording_url}>
+                  <audio controls className="audio-player" style={{ width: "100%", outline: "none", height: "38px" }} src={latestCall.recording_url}>
                     Your browser does not support the audio element.
                   </audio>
                 </div>
               ) : (
                 <div className="alert info" style={{ margin: "0 0 16px" }}>
-                  ℹ️ Audio recording processing or saved as transcript.
+                  ℹ️ Audio recording saved as transcript below.
                 </div>
               )}
 
               {latestCall.transcript && (
                 <div suppressHydrationWarning>
-                  <h3 style={{ fontSize: "14px", margin: "0 0 6px", color: "#163b2a" }} suppressHydrationWarning>📝 Call Transcript</h3>
+                  <h3 style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.06em", margin: "0 0 6px", color: "var(--text-muted)" }} suppressHydrationWarning>
+                    📝 Speech-To-Text Call Transcript
+                  </h3>
                   <div className="transcript" suppressHydrationWarning>{latestCall.transcript}</div>
                 </div>
               )}
@@ -170,8 +206,10 @@ export default async function LeadDetail({ params }: { params: Promise<{ id: str
         </div>
       </div>
 
-      <div className="section-title" suppressHydrationWarning>
-        <h2 suppressHydrationWarning>Booked Appointments</h2>
+      <div className="section-title" suppressHydrationWarning style={{ marginTop: "32px" }}>
+        <h2 suppressHydrationWarning>
+          <span>📅</span> Booked Consultations for {lead.first_name}
+        </h2>
       </div>
 
       <div className="card" suppressHydrationWarning>
@@ -179,11 +217,17 @@ export default async function LeadDetail({ params }: { params: Promise<{ id: str
           <div className="call-list" suppressHydrationWarning>
             {appointments.map(apt => (
               <div className="call-row" key={apt.id} suppressHydrationWarning>
-                <strong suppressHydrationWarning>📅 <span suppressHydrationWarning>{new Date(apt.appointment_datetime).toLocaleString()}</span></strong>
-                <span className="muted" suppressHydrationWarning>
-                  Status: <span className="badge completed">{apt.status}</span>
-                </span>
-                {apt.notes && <p style={{ margin: "6px 0 0", fontSize: "14px" }} suppressHydrationWarning>{apt.notes}</p>}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <strong style={{ fontFamily: "'JetBrains Mono', monospace" }} suppressHydrationWarning>
+                    📅 {new Date(apt.appointment_datetime).toLocaleString()}
+                  </strong>
+                  <span className="badge completed">{apt.status}</span>
+                </div>
+                {apt.notes && (
+                  <p style={{ margin: "8px 0 0", fontSize: "13px", color: "var(--text-secondary)" }} suppressHydrationWarning>
+                    {apt.notes}
+                  </p>
+                )}
               </div>
             ))}
           </div>

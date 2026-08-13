@@ -17,7 +17,7 @@ export default async function Dashboard() {
     const db = getSupabaseAdmin();
     const [l, c, a] = await Promise.all([
       db.from("leads").select("*").order("created_at", { ascending: false }),
-      db.from("calls").select("*").order("created_at", { ascending: false }).limit(6),
+      db.from("calls").select("*").order("created_at", { ascending: false }).limit(8),
       db.from("appointments").select("*").order("appointment_datetime", { ascending: true }).limit(6)
     ]);
     leads = (l.data || []) as Lead[];
@@ -32,15 +32,21 @@ export default async function Dashboard() {
   return (
     <div suppressHydrationWarning>
       <DashboardAutoRefresher />
+
+      {/* Telemetry Hero Command Banner */}
       <div className="hero" suppressHydrationWarning>
         <div suppressHydrationWarning>
-          <div className="eyebrow" suppressHydrationWarning>Solar Automation Pipeline</div>
-          <h1 suppressHydrationWarning>Solar Voice Agent</h1>
+          <div className="eyebrow" suppressHydrationWarning>
+            <span style={{ display: "inline-block", width: "6px", height: "6px", borderRadius: "50%", background: "#10b981" }} />
+            AUTONOMOUS CALL CENTER OPERATING SYSTEM
+          </div>
+          <h1 suppressHydrationWarning>Solar AI Voice Agent</h1>
           <p className="muted" suppressHydrationWarning>
-            Launch AI-driven solar sales consultations, qualify homeowners, and book appointments automatically.
+            Autonomous conversational agent qualifying leads against SGIP guidelines & booking engineer consultations.
           </p>
         </div>
-        <div className="actions" suppressHydrationWarning style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "nowrap", whiteSpace: "nowrap" }}>
+
+        <div className="actions" suppressHydrationWarning>
           <StartCallButton />
           <Link
             className="button secondary"
@@ -61,48 +67,78 @@ export default async function Dashboard() {
         </div>
       </div>
 
-      {error && <div className="alert" suppressHydrationWarning>{error}</div>}
+      {error && <div className="alert failed" suppressHydrationWarning>{error}</div>}
 
+      {/* High-Tech Stat Cards */}
       <div className="grid" suppressHydrationWarning>
         <div className="card" suppressHydrationWarning>
-          <div className="muted" suppressHydrationWarning>Test Leads</div>
+          <div className="card-top" suppressHydrationWarning>
+            <span className="muted" style={{ fontWeight: 600, fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.06em" }} suppressHydrationWarning>
+              Target Leads in Pipeline
+            </span>
+            <div className="stat-icon stat-leads" suppressHydrationWarning>👥</div>
+          </div>
           <div className="stat" suppressHydrationWarning>{leads.length}</div>
+          <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "6px" }} suppressHydrationWarning>
+            Active database records
+          </div>
         </div>
+
         <div className="card" suppressHydrationWarning>
-          <div className="muted" suppressHydrationWarning>Recent Calls</div>
-          <div className="stat" suppressHydrationWarning>{calls.length}</div>
+          <div className="card-top" suppressHydrationWarning>
+            <span className="muted" style={{ fontWeight: 600, fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.06em" }} suppressHydrationWarning>
+              Realtime Calls Placed
+            </span>
+            <div className="stat-icon stat-calls" suppressHydrationWarning>📞</div>
+          </div>
+          <div className="stat" style={{ color: "var(--accent-emerald)" }} suppressHydrationWarning>{calls.length}</div>
+          <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "6px" }} suppressHydrationWarning>
+            Recorded speech sessions
+          </div>
         </div>
+
         <div className="card" suppressHydrationWarning>
-          <div className="muted" suppressHydrationWarning>Booked Appointments</div>
-          <div className="stat" suppressHydrationWarning>{appointments.length}</div>
+          <div className="card-top" suppressHydrationWarning>
+            <span className="muted" style={{ fontWeight: 600, fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.06em" }} suppressHydrationWarning>
+              Booked Engineer Visits
+            </span>
+            <div className="stat-icon stat-apts" suppressHydrationWarning>📅</div>
+          </div>
+          <div className="stat" style={{ color: "var(--accent-amber)" }} suppressHydrationWarning>{appointments.length}</div>
+          <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "6px" }} suppressHydrationWarning>
+            Locked consultations
+          </div>
         </div>
       </div>
 
+      {/* Recent Activity Table */}
       <div className="section-title" suppressHydrationWarning>
-        <h2 suppressHydrationWarning>Recent Activity & Calls</h2>
-        <Link href="/leads">View all leads & calls →</Link>
+        <h2 suppressHydrationWarning>
+          <span>🎙</span> Realtime Telemetry & Call Logs
+        </h2>
+        <Link href="/leads">Full Database View →</Link>
       </div>
 
-      <div className="card table-wrap" suppressHydrationWarning>
+      <div className="table-wrap" suppressHydrationWarning>
         {calls.length ? (
           <table className="table" suppressHydrationWarning>
             <thead suppressHydrationWarning>
               <tr suppressHydrationWarning>
-                <th>Lead Name</th>
-                <th>Status</th>
-                <th>Outcome</th>
-                <th>Audio</th>
-                <th>Booked</th>
-                <th>Date & Time</th>
-                <th>Action</th>
+                <th>Lead Contact</th>
+                <th>Call Status</th>
+                <th>AI Disposition</th>
+                <th>Audio Stream</th>
+                <th>Appointment</th>
+                <th>Timestamp</th>
+                <th>Inspect</th>
               </tr>
             </thead>
             <tbody suppressHydrationWarning>
               {calls.map(call => (
                 <tr key={call.id} suppressHydrationWarning>
                   <td suppressHydrationWarning>
-                    <Link href={`/leads/${call.lead_id}`}>
-                      {names.get(call.lead_id) || "Test Lead"}
+                    <Link href={`/leads/${call.lead_id}`} style={{ fontWeight: 700 }}>
+                      {names.get(call.lead_id) || "Direct Lead"}
                     </Link>
                   </td>
                   <td suppressHydrationWarning>
@@ -110,7 +146,9 @@ export default async function Dashboard() {
                       {call.call_status}
                     </span>
                   </td>
-                  <td suppressHydrationWarning>{call.call_outcome || "—"}</td>
+                  <td suppressHydrationWarning style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
+                    {call.call_outcome || "—"}
+                  </td>
                   <td suppressHydrationWarning>
                     {call.recording_url ? (
                       <Link href={`/leads/${call.lead_id}`} style={{ textDecoration: "none" }}>
@@ -119,7 +157,7 @@ export default async function Dashboard() {
                         </span>
                       </Link>
                     ) : (
-                      <span className="muted" style={{ fontSize: "12px" }}>—</span>
+                      <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>—</span>
                     )}
                   </td>
                   <td suppressHydrationWarning>
@@ -129,9 +167,11 @@ export default async function Dashboard() {
                       <span className="badge pending">No Appointment</span>
                     )}
                   </td>
-                  <td suppressHydrationWarning>{new Date(call.created_at).toLocaleString()}</td>
+                  <td suppressHydrationWarning style={{ color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>
+                    {new Date(call.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {new Date(call.created_at).toLocaleDateString()}
+                  </td>
                   <td suppressHydrationWarning>
-                    <Link href={`/leads/${call.lead_id}`} className="button secondary" style={{ padding: "6px 12px", fontSize: "12px" }}>
+                    <Link href={`/leads/${call.lead_id}`} className="button secondary" style={{ padding: "4px 10px", fontSize: "12px", height: "32px" }}>
                       Details →
                     </Link>
                   </td>
@@ -141,13 +181,16 @@ export default async function Dashboard() {
           </table>
         ) : (
           <div className="empty" suppressHydrationWarning>
-            No calls placed yet. Click <strong>Start AI Call</strong> above to test a live call with a random Supabase lead!
+            No calls placed yet. Click <strong>Start Real-Time Voice Call</strong> to initiate an autonomous consultation.
           </div>
         )}
       </div>
 
-      <div className="section-title" suppressHydrationWarning>
-        <h2 suppressHydrationWarning>Upcoming Appointments</h2>
+      {/* Upcoming Appointments */}
+      <div className="section-title" suppressHydrationWarning style={{ marginTop: "36px" }}>
+        <h2 suppressHydrationWarning>
+          <span>📅</span> Confirmed Field Engineer Consultations
+        </h2>
       </div>
 
       <div className="card" suppressHydrationWarning>
@@ -155,11 +198,20 @@ export default async function Dashboard() {
           <div className="call-list" suppressHydrationWarning>
             {appointments.map(a => (
               <div className="call-row" key={a.id} suppressHydrationWarning>
-                <strong suppressHydrationWarning>{names.get(a.lead_id) || "Lead Consultation"}</strong>
-                <span className="muted" suppressHydrationWarning>
-                  📅 <span suppressHydrationWarning>{new Date(a.appointment_datetime).toLocaleString()}</span> · Status: <span className="badge completed">{a.status}</span>
-                </span>
-                {a.notes && <p style={{ margin: "4px 0 0", fontSize: "13px", color: "#4f5e55" }} suppressHydrationWarning>{a.notes}</p>}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                  <strong style={{ fontSize: "15px" }} suppressHydrationWarning>
+                    {names.get(a.lead_id) || "Homeowner Consultation"}
+                  </strong>
+                  <span className="badge completed">{a.status}</span>
+                </div>
+                <div className="muted" style={{ fontSize: "13px", fontFamily: "'JetBrains Mono', monospace" }} suppressHydrationWarning>
+                  📅 <span suppressHydrationWarning>{new Date(a.appointment_datetime).toLocaleString()}</span>
+                </div>
+                {a.notes && (
+                  <p style={{ margin: "8px 0 0", fontSize: "13px", color: "var(--text-secondary)", background: "rgba(255,255,255,0.02)", padding: "8px 12px", borderRadius: "6px", border: "1px solid rgba(255,255,255,0.04)" }} suppressHydrationWarning>
+                    {a.notes}
+                  </p>
+                )}
               </div>
             ))}
           </div>

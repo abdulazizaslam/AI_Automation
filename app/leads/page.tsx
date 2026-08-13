@@ -39,28 +39,34 @@ export default async function LeadsPage() {
   return (
     <div suppressHydrationWarning>
       <DashboardAutoRefresher />
+
       <div className="hero" suppressHydrationWarning>
         <div suppressHydrationWarning>
-          <div className="eyebrow" suppressHydrationWarning>Backend Lead Management</div>
-          <h1 suppressHydrationWarning>Leads & Calls</h1>
-          <p className="muted" suppressHydrationWarning>All test leads from Supabase and their latest voice agent status.</p>
+          <div className="eyebrow" suppressHydrationWarning>
+            <span style={{ display: "inline-block", width: "6px", height: "6px", borderRadius: "50%", background: "#10b981" }} />
+            CALL CENTER DATABASE
+          </div>
+          <h1 suppressHydrationWarning>Leads & Speech Records</h1>
+          <p className="muted" suppressHydrationWarning>
+            All contacts in your Supabase database, live qualification states, and call activity logs.
+          </p>
         </div>
-        <Link className="button secondary" href="/">
+        <Link className="button secondary" href="/" style={{ height: "44px" }}>
           ← Back to Dashboard
         </Link>
       </div>
 
-      <div className="card table-wrap" suppressHydrationWarning>
+      <div className="table-wrap" suppressHydrationWarning>
         <table className="table" suppressHydrationWarning>
           <thead suppressHydrationWarning>
             <tr suppressHydrationWarning>
-              <th>Lead Name</th>
+              <th>Contact Name & Property</th>
               <th>Phone</th>
               <th>Status</th>
-              <th>Last Call</th>
-              <th>Result</th>
+              <th>Latest Call</th>
+              <th>AI Outcome</th>
               <th>Appointment</th>
-              <th>Details</th>
+              <th>Telemetry</th>
             </tr>
           </thead>
           <tbody suppressHydrationWarning>
@@ -70,13 +76,17 @@ export default async function LeadsPage() {
               return (
                 <tr key={lead.id} suppressHydrationWarning>
                   <td suppressHydrationWarning>
-                    <strong suppressHydrationWarning>
+                    <strong style={{ color: "#fff" }} suppressHydrationWarning>
                       {lead.first_name} {lead.last_name}
                     </strong>
                     <br />
-                    <small className="muted" suppressHydrationWarning>{lead.property_address || lead.address}</small>
+                    <small style={{ color: "var(--text-muted)", fontSize: "12px" }} suppressHydrationWarning>
+                      📍 {lead.property_address || lead.address}
+                    </small>
                   </td>
-                  <td suppressHydrationWarning>{lead.phone}</td>
+                  <td suppressHydrationWarning style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "12.5px" }}>
+                    {lead.phone}
+                  </td>
                   <td suppressHydrationWarning>
                     <span className="badge completed">{lead.lead_status || "new"}</span>
                   </td>
@@ -86,22 +96,28 @@ export default async function LeadsPage() {
                         {call.call_status}
                       </span>
                     ) : (
-                      <span className="muted">No Calls</span>
+                      <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>No Calls</span>
                     )}
                   </td>
-                  <td suppressHydrationWarning>{call?.call_outcome || "—"}</td>
+                  <td suppressHydrationWarning style={{ color: "var(--text-secondary)", fontSize: "13px" }}>
+                    {call?.call_outcome || "—"}
+                  </td>
                   <td suppressHydrationWarning>
                     {apt ? (
                       <span className="badge completed" suppressHydrationWarning>
-                        {new Date(apt.appointment_datetime).toLocaleDateString()}
+                        📅 {new Date(apt.appointment_datetime).toLocaleDateString()}
                       </span>
                     ) : (
-                      "—"
+                      <span style={{ color: "var(--text-muted)" }}>—</span>
                     )}
                   </td>
                   <td suppressHydrationWarning>
-                    <Link href={`/leads/${lead.id}`} className="button secondary" style={{ padding: "6px 12px", fontSize: "12px" }}>
-                      View →
+                    <Link
+                      href={`/leads/${lead.id}`}
+                      className="button secondary"
+                      style={{ padding: "4px 10px", fontSize: "12px", height: "32px" }}
+                    >
+                      View Details →
                     </Link>
                   </td>
                 </tr>
@@ -109,7 +125,7 @@ export default async function LeadsPage() {
             })}
           </tbody>
         </table>
-        {!leads.length && <div className="empty" suppressHydrationWarning>No leads found.</div>}
+        {!leads.length && <div className="empty" suppressHydrationWarning>No leads found in Supabase.</div>}
       </div>
     </div>
   );
