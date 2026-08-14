@@ -40,6 +40,76 @@ function cleanAgentMessage(value: unknown) {
   return text ? text.slice(0, 3000) : null;
 }
 
+function lastAssistantMessage(history: ConversationTurn[]) {
+  return [...history].reverse().find(turn => turn.role === "assistant")?.content || "";
+}
+
+function enforceQualificationAndScript(
+  controlled: ReturnType<typeof buildDeterministicResponse>,
+  history: ConversationTurn[],
+  userUtterance: string,
+  address: string
+) {
+  const objection = findObjection(userUtterance, address);
+  if (objection) {
+    controlled.agent_message = objection;
+    controlled.call_completed = false;
+    controlled.appointment.booked = false;
+    controlled.appointment.status = "pending";
+    controlled.appointment.appointment_datetime = null;
+    controlled.appointment.notes = "Appointment not yet confirmed";
+    return { objection: true };
+  }
+
+  const q = controlled.qualification;
+  const coreAnswered =
+    q.homeowner_confirmed === true &&
+    q.average_electric_bill !== null &&
+    q.home_type !== null &&
+    q.credit_above_650 !== null &&
+    q.roof_shading !== null &&
+    q.electricity_provider !== null;
+
+  if (q.homeowner_confirmed === false) {
+    q.qualification_status = "Disqualified";
+  } else if (q.average_electric_bill !== null && q.average_electric_bill < 60) {
+    q.qualification_status = "Disqualified";
+    q.notes = "Disqualified: electricity bill is below the practical savings threshold.";
+  } else if (coreAnswered && q.credit_above_650 === true && (q.average_electric_bill || 0) >= 60) {
+    q.qualification_status = "Qualified";
+  } else if (q.qualification_status !== "Disqualified") {
+    q.qualification_status = "Pending";
+  }
+
+  const previousAssistant = lastAssistantMessage(history).toLowerCase();
+  if (
+    /electricity provider|current provider/.test(previousAssistant) &&
+    /decision makers|spouse|partner/i.test(controlled.agent_message)
+  ) {
+    controlled.agent_message = `Ok, so here's how this works. The program can potentially reduce your utility bill to zero and replace it with a solar payment 20 to 50% cheaper, locked against inflation. ${controlled.agent_message}`;
+  }
+
+  if (controlled.appointment.booked && q.qualification_status !== "Qualified") {
+    controlled.appointment.booked = false;
+    controlled.appointment.status = "pending";
+    controlled.appointment.appointment_datetime = null;
+    controlled.call_completed = q.qualification_status === "Disqualified";
+
+    if (q.qualification_status === "Disqualified") {
+      controlled.agent_message = "Based on what you've shared, this program does not look like the right fit right now. Thank you for your time.";
+      controlled.summary = "Lead did not meet the current qualification criteria.";
+    } else if (q.credit_above_650 === false) {
+      controlled.agent_message = "Because eligibility needs a credit score above 650, is there anyone else on the home who qualifies or could co-sign?";
+      controlled.summary = "Qualification pending credit eligibility.";
+    } else {
+      controlled.agent_message = "Before I schedule the engineer, I need to finish the remaining qualification questions.";
+      controlled.summary = "Qualification is still pending; appointment was not booked.";
+    }
+  }
+
+  return { objection: false };
+}
+
 async function optionallyPolishWithGemini(args: {
   firstName: string;
   address: string;
@@ -131,8 +201,17 @@ export async function POST(request: Request) {
       userUtterance
     });
 
-    const objection = findObjection(userUtterance, address);
-    const canParaphrase = !objection && !controlled.call_completed && !controlled.appointment.booked;
+    const enforcement = enforceQualificationAndScript(
+      controlled,
+      conversationHistory,
+      userUtterance,
+      address
+    );
+
+    const canParaphrase =
+      !enforcement.objection &&
+      !controlled.call_completed &&
+      !controlled.appointment.booked;
 
     if (canParaphrase) {
       const polished = await optionallyPolishWithGemini({
