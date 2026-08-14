@@ -26,7 +26,7 @@ if (!globalAny.mockStore) {
   };
 }
 
-const mockStore = globalAny.mockStore;
+const mockStore = globalAny.mockStore!;
 
 export function getSupabaseUrlAndKey() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
