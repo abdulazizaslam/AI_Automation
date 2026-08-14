@@ -235,7 +235,7 @@ export function buildDeterministicResponse(args: {
       else if (affirmative(text) || /\bown\b/i.test(text)) qualification.homeowner_confirmed = true;
     }
 
-    if (/electric bill|monthly bill|paying more than \$150/.test(previous)) {
+    if (/electric(?:ity)? bill|monthly (?:electric(?:ity)? )?bill|utility bill|power bill|paying more than \$150/.test(previous)) {
       qualification.average_electric_bill = extractBill(text) ?? qualification.average_electric_bill;
     }
 
