@@ -37,10 +37,21 @@ function safeEqual(a: string, b: string) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+function isSameOriginBrowserRequest(request: Request) {
+  const requestOrigin = new URL(request.url).origin;
+  const origin = request.headers.get("origin");
+  const fetchSite = request.headers.get("sec-fetch-site");
+
+  if (origin && origin !== requestOrigin) return false;
+  if (fetchSite && !["same-origin", "same-site", "none"].includes(fetchSite)) return false;
+  return Boolean(origin || fetchSite);
+}
+
 function hasValidBrowserToken(request: Request, callId?: string) {
   if (!callId) return false;
   const secret = process.env.CALL_COMPLETION_SECRET || process.env.N8N_WEBHOOK_SECRET;
-  if (!secret) return true;
+
+  if (!secret) return isSameOriginBrowserRequest(request);
 
   const cookie = getCookie(request, "solar_call_token");
   if (!cookie) return false;
@@ -49,6 +60,12 @@ function hasValidBrowserToken(request: Request, callId?: string) {
 
   const expected = createHmac("sha256", secret).update(callId).digest("hex");
   return safeEqual(signature, expected);
+}
+
+function safeText(value: unknown, maxLength: number) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, maxLength) : null;
 }
 
 export async function POST(request: Request) {
@@ -76,8 +93,8 @@ export async function POST(request: Request) {
   try {
     const db = getSupabaseAdmin();
     const lookup = body.call_id
-      ? db.from("calls").select("id, lead_id").eq("id", body.call_id).single()
-      : db.from("calls").select("id, lead_id").eq("external_call_id", body.external_call_id).single();
+      ? db.from("calls").select("id, lead_id, appointment_booked").eq("id", body.call_id).single()
+      : db.from("calls").select("id, lead_id, appointment_booked").eq("external_call_id", body.external_call_id).single();
 
     const { data: existing, error: lookupError } = await lookup;
     if (lookupError || !existing) {
@@ -85,20 +102,35 @@ export async function POST(request: Request) {
     }
 
     const status = body.call_status || "completed";
-    const recording = body.recording_url || null;
+    const appointment = body.appointment;
+    const shouldBookAppointment = Boolean(
+      body.appointment_booked && appointment && validDate(appointment.appointment_datetime)
+    );
 
-    const { error: callError } = await db.from("calls").update({
-      external_call_id: body.external_call_id || undefined,
-      call_status: status,
-      call_outcome: body.call_outcome || (body.appointment_booked ? "Appointment Booked" : "Completed"),
-      recording_url: recording,
-      transcript: body.transcript || null,
-      summary: body.summary || null,
-      appointment_booked: Boolean(body.appointment_booked)
-    }).eq("id", existing.id);
+    if (shouldBookAppointment && appointment?.appointment_datetime) {
+      const { data: existingAppointment, error: appointmentLookupError } = await db
+        .from("appointments")
+        .select("id")
+        .eq("lead_id", existing.lead_id)
+        .eq("appointment_datetime", appointment.appointment_datetime)
+        .maybeSingle();
 
-    if (callError) {
-      return NextResponse.json({ error: "Could not save call" }, { status: 500 });
+      if (appointmentLookupError) {
+        console.error("appointment lookup error:", appointmentLookupError);
+      }
+
+      if (!existingAppointment) {
+        const { error: appointmentError } = await db.from("appointments").insert({
+          lead_id: existing.lead_id,
+          appointment_datetime: appointment.appointment_datetime,
+          status: safeText(appointment.status, 50) || "confirmed",
+          notes: safeText(appointment.notes, 5000) || "Booked via Solar AI Voice Agent call"
+        });
+
+        if (appointmentError) {
+          return NextResponse.json({ error: "Appointment could not be saved" }, { status: 500 });
+        }
+      }
     }
 
     const qualification = body.qualification;
@@ -107,13 +139,13 @@ export async function POST(request: Request) {
         lead_id: existing.lead_id,
         average_electric_bill: typeof qualification.average_electric_bill === "number" ? qualification.average_electric_bill : null,
         homeowner_confirmed: typeof qualification.homeowner_confirmed === "boolean" ? qualification.homeowner_confirmed : null,
-        home_type: typeof qualification.home_type === "string" ? qualification.home_type : null,
-        electricity_provider: typeof qualification.electricity_provider === "string" ? qualification.electricity_provider : null,
+        home_type: safeText(qualification.home_type, 120),
+        electricity_provider: safeText(qualification.electricity_provider, 200),
         credit_above_650: typeof qualification.credit_above_650 === "boolean" ? qualification.credit_above_650 : null,
-        roof_shading: typeof qualification.roof_shading === "string" ? qualification.roof_shading : null,
+        roof_shading: safeText(qualification.roof_shading, 500),
         decision_maker: typeof qualification.decision_maker === "boolean" ? qualification.decision_maker : null,
-        qualification_status: typeof qualification.qualification_status === "string" ? qualification.qualification_status : "Pending",
-        notes: typeof qualification.notes === "string" ? qualification.notes : null
+        qualification_status: safeText(qualification.qualification_status, 80) || "Pending",
+        notes: safeText(qualification.notes, 5000)
       }, { onConflict: "lead_id" });
 
       if (qualificationError) {
@@ -121,25 +153,39 @@ export async function POST(request: Request) {
       }
     }
 
-    const appointment = body.appointment;
-    if (body.appointment_booked && appointment && validDate(appointment.appointment_datetime)) {
-      const { error: appointmentError } = await db.from("appointments").insert({
-        lead_id: existing.lead_id,
-        appointment_datetime: appointment.appointment_datetime,
-        status: appointment.status || "confirmed",
-        notes: appointment.notes || "Booked via Solar AI Voice Agent call"
-      });
+    const recording = typeof body.recording_url === "string" && body.recording_url.length <= 1_500_000
+      ? body.recording_url
+      : null;
 
-      if (appointmentError) {
-        return NextResponse.json({ error: "Call saved, but appointment could not be saved" }, { status: 500 });
-      }
+    const { error: callError } = await db.from("calls").update({
+      external_call_id: safeText(body.external_call_id, 500) || undefined,
+      call_status: status,
+      call_outcome: safeText(body.call_outcome, 500) || (shouldBookAppointment ? "Appointment Booked" : "Completed"),
+      recording_url: recording,
+      transcript: safeText(body.transcript, 200_000),
+      summary: safeText(body.summary, 10_000),
+      appointment_booked: shouldBookAppointment || Boolean(existing.appointment_booked)
+    }).eq("id", existing.id);
+
+    if (callError) {
+      return NextResponse.json({ error: "Could not save call" }, { status: 500 });
     }
 
-    await db.from("leads").update({
-      lead_status: body.appointment_booked ? "appointment_booked" : status
+    const { error: leadStatusError } = await db.from("leads").update({
+      lead_status: shouldBookAppointment || existing.appointment_booked ? "appointment_booked" : status
     }).eq("id", existing.lead_id);
 
-    const response = NextResponse.json({ success: true, call_id: existing.id });
+    if (leadStatusError) {
+      console.error("lead status update error:", leadStatusError);
+    }
+
+    const response = NextResponse.json({
+      success: true,
+      call_id: existing.id,
+      appointment_booked: shouldBookAppointment || Boolean(existing.appointment_booked),
+      recording_saved: Boolean(recording)
+    });
+    response.headers.set("Cache-Control", "no-store");
     response.cookies.set("solar_call_token", "", {
       httpOnly: true,
       sameSite: "strict",
@@ -150,6 +196,6 @@ export async function POST(request: Request) {
     return response;
   } catch (error) {
     console.error("voice-completion error:", error);
-    return NextResponse.json({ error: "Unable to complete call" }, { status: 500 });
+    return NextResponse.json({ error: "Unable to complete call. Check database configuration and server logs." }, { status: 500 });
   }
 }
