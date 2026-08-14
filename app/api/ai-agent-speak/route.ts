@@ -52,7 +52,10 @@ function enforceQualificationAndScript(
 ) {
   const objection = findObjection(userUtterance, address);
   if (objection) {
-    controlled.agent_message = objection;
+    const generatedTurn = controlled.agent_message.trim();
+    controlled.agent_message = generatedTurn.startsWith(objection)
+      ? generatedTurn
+      : objection;
     controlled.call_completed = false;
     controlled.appointment.booked = false;
     controlled.appointment.status = "pending";
