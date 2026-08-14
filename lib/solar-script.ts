@@ -243,7 +243,7 @@ export function buildDeterministicResponse(args: {
       if (/single[- ]?family/i.test(text)) qualification.home_type = "Single-Family";
       else if (/townhome|townhouse/i.test(text)) qualification.home_type = "Townhome";
       else if (/condo/i.test(text)) qualification.home_type = "Condo";
-      if (/\bown\b.*roof|yes|i do/i.test(text)) roofOwned = true;
+      if (/\bown\b.*roof|\byes\b|i do/i.test(text)) roofOwned = true;
       if (/don'?t own.*roof|no roof/i.test(text)) roofOwned = false;
     }
 
@@ -270,9 +270,8 @@ export function buildDeterministicResponse(args: {
       if (/afternoon|evening/i.test(text)) preference = "afternoon";
     }
 
-    const offeredMatch = previous.match(/appointment slot:([^|]+)/i);
-    if (offeredMatch) {
-      offeredAppointment = offeredMatch[1].trim();
+    if (/\bi have\b.*\bopen\b.*does that work|\bi can offer\b.*does that work/i.test(previous)) {
+      offeredAppointment = nextAppointmentIso(preference);
       if (affirmative(text)) appointmentAccepted = true;
       if (negative(text)) appointmentAccepted = false;
     }
@@ -369,13 +368,14 @@ export function buildDeterministicResponse(args: {
   if (!offeredAppointment && preference) {
     const appointmentIso = nextAppointmentIso(preference);
     const label = appointmentLabel(appointmentIso);
-    return makeResult(`Perfect. I have ${label} open. Does that work for you? [APPOINTMENT SLOT:${appointmentIso}|${label}]`);
+    return makeResult(`Perfect. I have ${label} open. Does that work for you?`);
   }
 
   if (offeredAppointment && !appointmentAccepted) {
-    const appointmentIso = nextAppointmentIso(preference === "morning" ? "afternoon" : "morning");
+    const alternatePreference = preference === "morning" ? "afternoon" : "morning";
+    const appointmentIso = nextAppointmentIso(alternatePreference);
     const label = appointmentLabel(appointmentIso);
-    return makeResult(`No problem. I can offer ${label} instead. Does that work? [APPOINTMENT SLOT:${appointmentIso}|${label}]`);
+    return makeResult(`No problem. I can offer ${label} instead. Does that work?`);
   }
 
   if (appointmentAccepted && !lockConfirmed) {
