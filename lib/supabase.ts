@@ -16,6 +16,8 @@ type MockStore = {
   appointments: Appointment[];
 };
 
+export type SupabaseMode = "service_role" | "anon" | "mock";
+
 const globalAny = globalThis as typeof globalThis & { mockStore?: MockStore };
 if (!globalAny.mockStore) {
   globalAny.mockStore = {
@@ -28,20 +30,34 @@ if (!globalAny.mockStore) {
 
 const mockStore = globalAny.mockStore!;
 
+export function getSupabaseConfig() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() || null;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || null;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() || null;
+
+  const key = serviceRoleKey || anonKey;
+  const mode: SupabaseMode = url && key
+    ? (serviceRoleKey ? "service_role" : "anon")
+    : "mock";
+
+  return { url, key, mode };
+}
+
 export function getSupabaseUrlAndKey() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  return {
-    url: url?.trim() ? url : null,
-    key: key?.trim() ? key : null
-  };
+  const { url, key } = getSupabaseConfig();
+  return { url, key };
 }
 
 export function getSupabaseAdmin() {
-  const { url, key } = getSupabaseUrlAndKey();
+  const { url, key, mode } = getSupabaseConfig();
   if (!url || !key) {
     return createMockSupabase();
   }
+
+  if (mode === "anon" && process.env.NODE_ENV === "production") {
+    console.warn("SUPABASE_SERVICE_ROLE_KEY is not configured; using anon key. Server writes require compatible RLS policies.");
+  }
+
   return createClient(url, key, {
     auth: { autoRefreshToken: false, persistSession: false }
   });

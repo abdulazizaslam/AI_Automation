@@ -11,7 +11,16 @@ function createCallToken(callId: string) {
   return createHmac("sha256", secret).update(callId).digest("hex");
 }
 
-export async function POST() {
+function getRequestOrigin(request: Request) {
+  const forwardedHost = request.headers.get("x-forwarded-host");
+  const host = forwardedHost || request.headers.get("host");
+  const forwardedProto = request.headers.get("x-forwarded-proto") || "https";
+
+  if (host) return `${forwardedProto}://${host}`;
+  return new URL(request.url).origin;
+}
+
+export async function POST(request: Request) {
   try {
     const db = getSupabaseAdmin();
 
@@ -25,7 +34,7 @@ export async function POST() {
 
     const leads = leadsRes.data || [];
     if (!leads.length) {
-      return NextResponse.json({ error: "No leads available in Supabase" }, { status: 404 });
+      return NextResponse.json({ error: "No leads available. Check your Supabase configuration and leads table." }, { status: 404 });
     }
 
     const calledLeadIdSet = new Set((callsRes.data || []).map((c: { lead_id: string }) => c.lead_id));
@@ -46,13 +55,18 @@ export async function POST() {
       .select("id, lead_id, call_status")
       .single();
 
-    if (callError || !call) throw callError || new Error("Call record was not created");
+    if (callError || !call) {
+      await db.from("leads").update({ lead_status: "new" }).eq("id", lead.id);
+      throw callError || new Error("Call record was not created");
+    }
 
-    const webhookUrl = process.env.N8N_START_CALL_WEBHOOK_URL;
+    const webhookUrl = process.env.N8N_START_CALL_WEBHOOK_URL?.trim();
     let n8nTriggered = false;
+    let n8nStatus: number | null = null;
 
     if (webhookUrl) {
       try {
+        const publicOrigin = getRequestOrigin(request);
         const payload = {
           call_id: call.id,
           lead: {
@@ -63,7 +77,7 @@ export async function POST() {
             email: lead.email,
             property_address: address
           },
-          callback_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/api/voice-completion`
+          callback_url: `${publicOrigin}/api/voice-completion`
         };
 
         const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -73,9 +87,11 @@ export async function POST() {
           method: "POST",
           headers,
           body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(10000)
+          signal: AbortSignal.timeout(10000),
+          cache: "no-store"
         });
 
+        n8nStatus = n8nRes.status;
         n8nTriggered = n8nRes.ok;
         if (!n8nRes.ok) {
           console.warn("n8n webhook returned non-success status:", n8nRes.status);
@@ -98,9 +114,12 @@ export async function POST() {
         property_address: address
       },
       n8n_triggered: n8nTriggered,
+      n8n_status: n8nStatus,
       remaining_uncalled: remainingUncalledCount,
       message: `Started call with ${lead.first_name} ${lead.last_name}. (${remainingUncalledCount} uncalled leads remaining)`
     });
+
+    response.headers.set("Cache-Control", "no-store");
 
     const callToken = createCallToken(call.id);
     if (callToken) {
@@ -116,6 +135,6 @@ export async function POST() {
     return response;
   } catch (error) {
     console.error("start-call route error:", error);
-    return NextResponse.json({ error: "Unable to start AI call" }, { status: 500 });
+    return NextResponse.json({ error: "Unable to start AI call. Check database configuration and server logs." }, { status: 500 });
   }
 }
