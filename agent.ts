@@ -1,7 +1,6 @@
 import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 
-// LiveKit Google plugin uses GOOGLE_API_KEY or GEMINI_API_KEY
 if (!process.env.GOOGLE_API_KEY && process.env.GEMINI_API_KEY) {
   process.env.GOOGLE_API_KEY = process.env.GEMINI_API_KEY;
 }
@@ -65,11 +64,11 @@ export default defineAgent({
   entry: async (ctx: JobContext) => {
     await ctx.connect();
 
-    console.log("🎙️ LiveKit Solar Voice Agent connected to room:", ctx.room.name);
+    console.log("LiveKit Solar Voice Agent connected to room:", ctx.room.name);
 
     const session = new voice.AgentSession({
       llm: new google.beta.realtime.RealtimeModel({
-        model: "gemini-2.0-flash-exp",
+        model: process.env.GEMINI_LIVE_MODEL || "gemini-2.5-flash-native-audio-preview-12-2025",
         voice: "Aoede",
         temperature: 0.4,
         instructions: SOLAR_SCRIPT_INSTRUCTIONS,
@@ -78,11 +77,9 @@ export default defineAgent({
 
     const agent = new voice.Agent();
     await session.start({ agent, room: ctx.room });
-
-    // Agent speaks first — deliver the Step 1 Opening Hook
     await session.generateReply();
 
-    console.log("✅ Solar Voice Agent is live and speaking in room:", ctx.room.name);
+    console.log("Solar Voice Agent is live and speaking in room:", ctx.room.name);
   },
 });
 
