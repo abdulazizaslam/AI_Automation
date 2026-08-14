@@ -239,12 +239,19 @@ export function buildDeterministicResponse(args: {
       qualification.average_electric_bill = extractBill(text) ?? qualification.average_electric_bill;
     }
 
-    if (/single-family|own the roof|home type/.test(previous)) {
-      if (/single[- ]?family/i.test(text)) qualification.home_type = "Single-Family";
+    if (/single-family|single family|own the roof|home type|type of home|house.*roof/.test(previous)) {
+      if (/single[- ]?family|detached|standalone house/i.test(text)) qualification.home_type = "Single-Family";
       else if (/townhome|townhouse/i.test(text)) qualification.home_type = "Townhome";
       else if (/condo/i.test(text)) qualification.home_type = "Condo";
-      if (/\bown\b.*roof|\byes\b|i do/i.test(text)) roofOwned = true;
-      if (/don'?t own.*roof|no roof/i.test(text)) roofOwned = false;
+
+      // A plain affirmative answers both parts of the combined scripted question.
+      if (affirmative(text)) {
+        qualification.home_type = qualification.home_type || "Single-Family";
+        roofOwned = true;
+      } else {
+        if (/\bown\b.*roof|own my roof/i.test(text)) roofOwned = true;
+        if (/don'?t own.*roof|do not own.*roof|no roof/i.test(text)) roofOwned = false;
+      }
     }
 
     if (/credit/.test(previous)) {
@@ -256,27 +263,32 @@ export function buildDeterministicResponse(args: {
       qualification.roof_shading = text.slice(0, 500);
     }
 
-    if (/electricity provider|utility provider|current provider/.test(previous)) {
+    if (/electricity provider|utility provider|current provider|power company|electric company/.test(previous)) {
       qualification.electricity_provider = text.slice(0, 200);
     }
 
-    if (/decision makers|spouse|partner/.test(previous)) {
+    if (/decision makers|spouse|partner|anyone else.*decision/.test(previous)) {
       if (affirmative(text) || /spouse|wife|husband|partner/i.test(text)) qualification.decision_maker = true;
       else if (negative(text) || /just me|only me/i.test(text)) qualification.decision_maker = false;
     }
 
-    if (/morning or afternoon/.test(previous)) {
+    if (/morning or afternoon|morning.*afternoon|afternoon.*morning/.test(previous)) {
       if (/morning/i.test(text)) preference = "morning";
       if (/afternoon|evening/i.test(text)) preference = "afternoon";
     }
 
-    if (/\bi have\b.*\bopen\b.*does that work|\bi can offer\b.*does that work/i.test(previous)) {
-      offeredAppointment = nextAppointmentIso(preference);
+    if (/\b(i have|i can offer)\b.*\b(does that work|work for you)\b/i.test(previous)) {
+      const offeredPreference = /10:00\s*am|morning/i.test(previous)
+        ? "morning"
+        : /3:00\s*pm|afternoon/i.test(previous)
+          ? "afternoon"
+          : preference;
+      offeredAppointment = nextAppointmentIso(offeredPreference);
       if (affirmative(text)) appointmentAccepted = true;
       if (negative(text)) appointmentAccepted = false;
     }
 
-    if (/anything that would keep you from being available/.test(previous)) {
+    if (/anything that would keep you|keep you from being available|prevent you from attending/.test(previous)) {
       if (!/can'?t|cannot|won'?t|not available|conflict/i.test(text)) lockConfirmed = true;
     }
   }
