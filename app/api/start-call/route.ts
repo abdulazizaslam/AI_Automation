@@ -43,12 +43,6 @@ export async function POST(request: Request) {
     const lead = pool[Math.floor(Math.random() * pool.length)];
     const address = lead.property_address || lead.address || "101 Solar Way";
 
-    const { error: leadUpdateError } = await db
-      .from("leads")
-      .update({ lead_status: "in_progress" })
-      .eq("id", lead.id);
-    if (leadUpdateError) throw leadUpdateError;
-
     const { data: call, error: callError } = await db
       .from("calls")
       .insert({ lead_id: lead.id, call_status: "in_progress", call_outcome: "Call initiated" })
@@ -56,7 +50,6 @@ export async function POST(request: Request) {
       .single();
 
     if (callError || !call) {
-      await db.from("leads").update({ lead_status: "new" }).eq("id", lead.id);
       throw callError || new Error("Call record was not created");
     }
 
