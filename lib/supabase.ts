@@ -9,7 +9,14 @@ export const defaultSeedLeads: Lead[] = [
   { id: "55555555-5555-4555-a555-555555555555", first_name: "Emily", last_name: "Davis", email: "emily.davis@example.com", phone: "+15550100005", property_address: "505 Ray Court", address: "505 Ray Court", lead_status: "new", created_at: new Date().toISOString() }
 ];
 
-const globalAny = globalThis as any;
+type MockStore = {
+  leads: Lead[];
+  calls: Call[];
+  qualifications: Qualification[];
+  appointments: Appointment[];
+};
+
+const globalAny = globalThis as typeof globalThis & { mockStore?: MockStore };
 if (!globalAny.mockStore) {
   globalAny.mockStore = {
     leads: [...defaultSeedLeads],
@@ -19,99 +26,137 @@ if (!globalAny.mockStore) {
   };
 }
 
-const mockLeadsStore: Lead[] = globalAny.mockStore.leads;
-const mockCallsStore: Call[] = globalAny.mockStore.calls;
-const mockQualificationsStore: Qualification[] = globalAny.mockStore.qualifications;
-const mockAppointmentsStore: Appointment[] = globalAny.mockStore.appointments;
+const mockStore = globalAny.mockStore;
 
 export function getSupabaseUrlAndKey() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://drpymjqvyetxhszhxtdd.supabase.co";
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  return { url, key: key?.trim() ? key : null };
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  return {
+    url: url?.trim() ? url : null,
+    key: key?.trim() ? key : null
+  };
 }
 
 export function getSupabaseAdmin() {
   const { url, key } = getSupabaseUrlAndKey();
-  if (!key) {
+  if (!url || !key) {
     return createMockSupabase();
   }
-  return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
+  return createClient(url, key, {
+    auth: { autoRefreshToken: false, persistSession: false }
+  });
 }
 
 export function getMockLeadById(id: string): Lead {
-  return mockLeadsStore.find(l => l.id === id) || defaultSeedLeads.find(l => l.id === id) || defaultSeedLeads[0];
+  return mockStore.leads.find(lead => lead.id === id)
+    || defaultSeedLeads.find(lead => lead.id === id)
+    || defaultSeedLeads[0];
 }
 
 export function getMockLeads(): Lead[] {
-  return mockLeadsStore.length ? mockLeadsStore : defaultSeedLeads;
+  return mockStore.leads.length ? mockStore.leads : defaultSeedLeads;
+}
+
+function tableStore(table: string): Record<string, unknown>[] {
+  if (table === "leads") return mockStore.leads as unknown as Record<string, unknown>[];
+  if (table === "calls") return mockStore.calls as unknown as Record<string, unknown>[];
+  if (table === "lead_qualifications") return mockStore.qualifications as unknown as Record<string, unknown>[];
+  if (table === "appointments") return mockStore.appointments as unknown as Record<string, unknown>[];
+  return [];
 }
 
 function createMockSupabase(): any {
   return {
     from: (table: string) => {
-      let data: any[] = [];
-      if (table === "leads") data = mockLeadsStore.length ? [...mockLeadsStore] : [...defaultSeedLeads];
-      else if (table === "calls") data = [...mockCallsStore];
-      else if (table === "lead_qualifications") data = [...mockQualificationsStore];
-      else if (table === "appointments") data = [...mockAppointmentsStore];
+      const source = tableStore(table);
+      let data = [...source];
+      let pendingUpdate: Record<string, unknown> | null = null;
+      let deleteMode = false;
 
-      const chain = {
+      const applyFilter = (predicate: (item: Record<string, unknown>) => boolean) => {
+        if (pendingUpdate) {
+          source.forEach(item => {
+            if (predicate(item)) Object.assign(item, pendingUpdate);
+          });
+          return { data: null, error: null };
+        }
+
+        if (deleteMode) {
+          for (let index = source.length - 1; index >= 0; index--) {
+            if (predicate(source[index])) source.splice(index, 1);
+          }
+          return { data: null, error: null };
+        }
+
+        data = data.filter(predicate);
+        return null;
+      };
+
+      const chain: any = {
         select: (_cols?: string) => chain,
-        order: (_col: string, _opts?: any) => chain,
+        order: (column: string, options?: { ascending?: boolean }) => {
+          const ascending = options?.ascending !== false;
+          data.sort((a, b) => {
+            const left = a[column];
+            const right = b[column];
+            if (left === right) return 0;
+            if (left == null) return 1;
+            if (right == null) return -1;
+            return String(left).localeCompare(String(right)) * (ascending ? 1 : -1);
+          });
+          return chain;
+        },
         limit: (n: number) => {
           data = data.slice(0, n);
           return chain;
         },
-        eq: (col: string, val: any) => {
-          data = data.filter(item => String(item[col]) === String(val));
-          return chain;
+        eq: (column: string, value: unknown) => {
+          const result = applyFilter(item => String(item[column]) === String(value));
+          return result ? Promise.resolve(result) : chain;
+        },
+        neq: (column: string, value: unknown) => {
+          const result = applyFilter(item => String(item[column]) !== String(value));
+          return result ? Promise.resolve(result) : chain;
         },
         maybeSingle: async () => ({ data: data[0] || null, error: null }),
         single: async () => ({ data: data[0] || null, error: data[0] ? null : { message: "Not found" } }),
-        insert: (rowOrRows: any) => {
+        insert: (rowOrRows: Record<string, unknown> | Record<string, unknown>[]) => {
           const rows = Array.isArray(rowOrRows) ? rowOrRows : [rowOrRows];
-          const inserted: any[] = [];
-          rows.forEach(r => {
-            const newRow = { id: r.id || crypto.randomUUID(), created_at: new Date().toISOString(), ...r };
-            if (table === "leads") mockLeadsStore.unshift(newRow);
-            else if (table === "calls") mockCallsStore.unshift(newRow);
-            else if (table === "lead_qualifications") mockQualificationsStore.unshift(newRow);
-            else if (table === "appointments") mockAppointmentsStore.unshift(newRow);
-            inserted.push(newRow);
-          });
-          return {
-            select: () => ({
-              single: async () => ({ data: inserted[0], error: null }),
-              then: (cb: any) => Promise.resolve({ data: inserted, error: null }).then(cb)
-            }),
-            then: (cb: any) => Promise.resolve({ data: inserted, error: null }).then(cb)
+          const inserted = rows.map(row => ({
+            id: row.id || crypto.randomUUID(),
+            created_at: row.created_at || new Date().toISOString(),
+            ...row
+          }));
+          source.unshift(...inserted);
+          data = inserted;
+          return chain;
+        },
+        update: (updates: Record<string, unknown>) => {
+          pendingUpdate = updates;
+          return chain;
+        },
+        delete: () => {
+          deleteMode = true;
+          return chain;
+        },
+        upsert: async (item: Record<string, unknown>, options?: { onConflict?: string }) => {
+          const conflictKey = options?.onConflict;
+          const index = conflictKey
+            ? source.findIndex(row => String(row[conflictKey]) === String(item[conflictKey]))
+            : -1;
+          const record = {
+            id: item.id || (index >= 0 ? source[index].id : crypto.randomUUID()),
+            created_at: item.created_at || (index >= 0 ? source[index].created_at : new Date().toISOString()),
+            ...item
           };
+          if (index >= 0) source[index] = record;
+          else source.unshift(record);
+          return { data: record, error: null };
         },
-        update: (updates: any) => ({
-          eq: (col: string, val: any) => {
-            if (table === "calls") {
-              mockCallsStore.forEach(item => {
-                if (String(item[col as keyof Call]) === String(val)) Object.assign(item, updates);
-              });
-            } else if (table === "leads") {
-              mockLeadsStore.forEach(item => {
-                if (String(item[col as keyof Lead]) === String(val)) Object.assign(item, updates);
-              });
-            }
-            return Promise.resolve({ data: updates, error: null });
-          }
-        }),
-        upsert: (item: any, _opts?: any) => {
-          if (table === "lead_qualifications") {
-            const idx = mockQualificationsStore.findIndex(q => q.lead_id === item.lead_id);
-            const newRecord = { id: item.id || crypto.randomUUID(), created_at: new Date().toISOString(), ...item };
-            if (idx >= 0) mockQualificationsStore[idx] = newRecord;
-            else mockQualificationsStore.unshift(newRecord);
-          }
-          return Promise.resolve({ data: item, error: null });
-        },
-        then: (cb: any) => Promise.resolve({ data, error: null }).then(cb)
+        then: (resolve: (value: { data: Record<string, unknown>[]; error: null }) => unknown) =>
+          Promise.resolve({ data, error: null }).then(resolve)
       };
+
       return chain;
     }
   };
