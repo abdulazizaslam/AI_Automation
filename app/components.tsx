@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Lead } from "@/lib/types";
@@ -172,7 +172,6 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
   const [history, setHistory] = useState<Turn[]>([]);
   const [status, setStatus] = useState<CallStatus>("connecting");
   const [liveTranscript, setLiveTranscript] = useState("");
-  const [manualInput, setManualInput] = useState("");
   const [isMuted, setIsMuted] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const [callEnded, setCallEnded] = useState(false);
@@ -286,7 +285,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognitionClass) {
       setSpeechSupported(false);
-      setMicNotice("Speech recognition is not supported in this browser. Type your reply below or use Chrome/Edge.");
+      setMicNotice("Speech recognition is not supported in this browser. Please use Chrome or Edge and allow microphone access.");
       resolve("");
       return;
     }
@@ -337,10 +336,10 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
 
     recognition.onerror = (event: any) => {
       if (event.error === "not-allowed" || event.error === "service-not-allowed") {
-        setMicNotice("Microphone/speech permission was blocked. Type your reply below or allow microphone access.");
+        setMicNotice("Microphone permission was blocked. Allow microphone access in Chrome or Edge, then start the call again.");
         setSpeechSupported(false);
       } else if (event.error !== "aborted" && event.error !== "no-speech") {
-        setMicNotice(`Speech recognition issue: ${event.error}. You can type your reply below.`);
+        setMicNotice(`Speech recognition issue: ${event.error}. Please check microphone access and try again.`);
       }
       settle(accumulated);
     };
@@ -481,7 +480,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
       }
     } catch (error) {
       console.error("Conversation error:", error);
-      setMicNotice(error instanceof Error ? error.message : "Conversation error. Try typing a reply below.");
+      setMicNotice(error instanceof Error ? error.message : "Conversation error. Please try speaking again.");
       if (!callEndedRef.current) setStatus("listening");
     } finally {
       conversationBusyRef.current = false;
@@ -538,12 +537,12 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
         }
       } catch (error) {
         console.warn("Microphone access notice:", error);
-        setMicNotice("Microphone access is unavailable. You can still test the agent by typing replies below.");
+        setMicNotice("Microphone access is unavailable. Connect a microphone, allow access, and start the call again.");
       }
 
       if (!("SpeechRecognition" in window) && !("webkitSpeechRecognition" in window)) {
         setSpeechSupported(false);
-        setMicNotice("Speech recognition is unavailable in this browser. Type replies below or use Chrome/Edge.");
+        setMicNotice("Speech recognition is unavailable. Please use Chrome or Edge with microphone access.");
       }
 
       if ("speechSynthesis" in window) {
@@ -628,14 +627,6 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
     }
   }
 
-  function submitManualReply(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const text = manualInput.trim();
-    if (!text || callEnded || status === "processing" || status === "speaking") return;
-    setManualInput("");
-    runConversationLoop(text);
-  }
-
   const latestAssistantMessage = [...history].reverse().find(turn => turn.role === "assistant")?.content;
   const latestUserMessage = [...history].reverse().find(turn => turn.role === "user")?.content;
 
@@ -706,7 +697,7 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
                 ) : latestUserMessage ? (
                   `"${latestUserMessage}"`
                 ) : (
-                  <span style={{ color: "var(--text-muted)" }}>Speak naturally or type your reply below...</span>
+                  <span style={{ color: "var(--text-muted)" }}>Speak naturally after Alex finishes...</span>
                 )}
               </div>
             )}
@@ -727,28 +718,6 @@ function RealtimeVoiceCallModal({ session, onClose }: { session: CallSession; on
             )}
           </div>
 
-          {!callEnded && (
-            <form onSubmit={submitManualReply} style={{ display: "flex", gap: "8px", width: "100%", marginTop: "12px" }}>
-              <input
-                value={manualInput}
-                onChange={event => setManualInput(event.target.value)}
-                placeholder={speechSupported ? "Optional: type a reply instead of speaking" : "Type your reply here"}
-                disabled={status === "processing" || status === "speaking"}
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  padding: "10px 12px",
-                  borderRadius: "8px",
-                  border: "1px solid rgba(255,255,255,0.12)",
-                  background: "rgba(255,255,255,0.04)",
-                  color: "inherit"
-                }}
-              />
-              <button className="button secondary" type="submit" disabled={!manualInput.trim() || status === "processing" || status === "speaking"}>
-                Send
-              </button>
-            </form>
-          )}
         </div>
 
         <div className="call-controls-hud">
