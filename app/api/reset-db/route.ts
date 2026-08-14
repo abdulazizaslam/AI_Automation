@@ -5,29 +5,31 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST() {
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_DB_RESET !== "true") {
+    return NextResponse.json(
+      { error: "Database reset is disabled in production" },
+      { status: 403 }
+    );
+  }
+
   try {
     const db = getSupabaseAdmin();
 
-    // 1. Delete all appointments, qualifications, and calls
     const [aptRes, qualRes, callRes] = await Promise.all([
       db.from("appointments").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
       db.from("lead_qualifications").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
       db.from("calls").delete().neq("id", "00000000-0000-0000-0000-000000000000")
     ]);
 
-    // 2. Reset lead statuses back to 'new' (preserving all leads in the table)
-    await db.from("leads").update({ lead_status: "new" }).neq("id", "00000000-0000-0000-0000-000000000000");
+    const deleteError = aptRes.error || qualRes.error || callRes.error;
+    if (deleteError) throw deleteError;
 
-    // 3. Clear local in-memory fallback stores
-    const globalAny = globalThis as any;
-    if (globalAny.mockStore) {
-      globalAny.mockStore.calls = [];
-      globalAny.mockStore.qualifications = [];
-      globalAny.mockStore.appointments = [];
-      if (globalAny.mockStore.leads) {
-        globalAny.mockStore.leads.forEach((l: any) => { l.lead_status = "new"; });
-      }
-    }
+    const { error: leadResetError } = await db
+      .from("leads")
+      .update({ lead_status: "new" })
+      .neq("id", "00000000-0000-0000-0000-000000000000");
+
+    if (leadResetError) throw leadResetError;
 
     return NextResponse.json({
       success: true,
