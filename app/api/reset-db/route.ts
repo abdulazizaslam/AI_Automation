@@ -4,10 +4,24 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function POST() {
-  if (process.env.NODE_ENV === "production" && process.env.ALLOW_DB_RESET !== "true") {
+function isSameOriginBrowserRequest(request: Request) {
+  const requestOrigin = new URL(request.url).origin;
+  const origin = request.headers.get("origin");
+  const fetchSite = request.headers.get("sec-fetch-site");
+
+  if (origin && origin !== requestOrigin) return false;
+  if (fetchSite && !["same-origin", "same-site", "none"].includes(fetchSite)) return false;
+
+  return Boolean(origin || fetchSite);
+}
+
+export async function POST(request: Request) {
+  const explicitlyEnabled = process.env.ALLOW_DB_RESET === "true";
+  const sameOriginRequest = isSameOriginBrowserRequest(request);
+
+  if (process.env.NODE_ENV === "production" && !explicitlyEnabled && !sameOriginRequest) {
     return NextResponse.json(
-      { error: "Database reset is disabled in production" },
+      { error: "Database reset is only allowed from the app UI in production" },
       { status: 403 }
     );
   }
@@ -31,12 +45,14 @@ export async function POST() {
 
     if (leadResetError) throw leadResetError;
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       message: "Database cleaned and reset successfully. All leads are preserved."
     });
+    response.headers.set("Cache-Control", "no-store");
+    return response;
   } catch (error) {
     console.error("reset-db error:", error);
-    return NextResponse.json({ error: "Failed to reset database" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to reset database. Check Supabase permissions and server logs." }, { status: 500 });
   }
 }
